@@ -22,7 +22,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Convert async URL to sync for Alembic
-db_url = settings.DATABASE_URL
+db_url = settings.database_url
 if "+asyncpg" in db_url:
     db_url = db_url.replace("+asyncpg", "")
 config.set_main_option("sqlalchemy.url", db_url)

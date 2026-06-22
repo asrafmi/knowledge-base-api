@@ -2,12 +2,24 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
-    ANTHROPIC_API_KEY: str
-    VOYAGE_API_KEY: str
-    CHUNK_SIZE: int = 512
-    CHUNK_OVERLAP: int = 50
-    RETRIEVAL_TOP_K: int = 5
+    # Database
+    database_url: str
+    db_user: str
+    db_password: str
+    db_name: str
+    db_port: int = 5432
+
+    # Application
+    app_port: int = 8000
+
+    # API Keys
+    anthropic_api_key: str
+    voyage_api_key: str
+
+    # RAG Parameters
+    chunk_size: int = 512
+    chunk_overlap: int = 50
+    retrieval_top_k: int = 5
 
     class Config:
         env_file = ".env"

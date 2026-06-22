@@ -5,15 +5,64 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 ## Quick Start
 
 ### Prerequisites
-- Python 3.11+
-- PostgreSQL 16+ dengan pgvector extension
-- Docker & Docker Compose (untuk database)
+- Docker & Docker Compose
+- (Optional) Python 3.11+ untuk local development
 
-### Setup
+### Setup dengan Docker (Recommended)
+
+1. **Setup Environment Variables**
+```bash
+cp .env.example .env
+# Edit .env dengan API keys (ANTHROPIC_API_KEY, VOYAGE_API_KEY)
+```
+
+2. **Build & Start**
+```bash
+cd misc/docker
+docker-compose up --build
+```
+
+Ini akan:
+- Build Docker image
+- Start PostgreSQL
+- Run migrator (install pgvector + run migrations)
+- Start FastAPI server
+
+Services:
+- `postgres` — Database (port 5432)
+- `migrator` — Run migrations then exit
+- `app` — FastAPI server (port 8000)
+
+Server running di `http://localhost:8000`
+API docs: `http://localhost:8000/docs`
+
+**After migrations complete:**
+```bash
+docker-compose logs migrator
+```
+
+**Stop:**
+```bash
+docker-compose down
+```
+
+**Run migrations only:**
+```bash
+docker-compose run migrator
+```
+
+**View logs:**
+```bash
+docker-compose logs -f app
+docker-compose logs migrator
+```
+
+---
+
+### Setup Local Development (tanpa Docker)
 
 1. **Clone & Install Dependencies**
 ```bash
-cd knowledge-base-api
 uv venv
 source .venv/bin/activate  # atau .venv\Scripts\activate di Windows
 pip install -r requirements.txt
@@ -22,17 +71,21 @@ pip install -r requirements.txt
 2. **Setup Environment Variables**
 ```bash
 cp .env.example .env
-# Edit .env dengan API keys dan database URL
+# Edit .env dengan database URL & API keys
 ```
 
-3. **Start PostgreSQL**
+3. **Start PostgreSQL Container Only**
 ```bash
 cd misc/docker
-docker-compose up -d
+docker-compose up postgres -d
 ```
 
-4. **Run Migrations**
+4. **Setup Database**
 ```bash
+# Install pgvector extension
+psql -h localhost -U postgres -d knowledge_base -c "CREATE EXTENSION IF NOT EXISTS vector"
+
+# Run migrations
 alembic upgrade head
 ```
 
@@ -40,8 +93,6 @@ alembic upgrade head
 ```bash
 uvicorn main:app --reload --port 8000
 ```
-
-Server running di `http://localhost:8000`. API docs tersedia di `http://localhost:8000/docs`
 
 ## API Endpoints
 
