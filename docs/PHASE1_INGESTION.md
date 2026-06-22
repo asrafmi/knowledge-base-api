@@ -184,7 +184,7 @@ from pgvector.sqlalchemy import Vector
 
 **Time**: 3 min
 
-Add 3 new response schemas at end of file:
+Add 4 new response schemas at end of file:
 
 ```python
 class DocumentResponse(BaseModel):
@@ -199,7 +199,7 @@ class DocumentResponse(BaseModel):
         from_attributes = True
 
 
-class DocumentListResponse(BaseModel):
+class DocumentItemResponse(BaseModel):
     id: UUID
     filename: str
     chunk_count: int
@@ -207,6 +207,10 @@ class DocumentListResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DocumentListResponse(BaseModel):
+    documents: list[DocumentItemResponse]
 
 
 class IngestionResponse(BaseModel):
@@ -333,7 +337,7 @@ async def embed_chunks(chunks: list[str], input_type: str = "document") -> list[
     
     result = client.embed(
         texts=chunks,
-        model="voyage-3",
+        model="voyage-4",
         input_type=input_type
     )
     
@@ -507,7 +511,7 @@ async def ingest_document(
             os.remove(temp_path)
 
 
-@router.get("/documents", response_model=list[DocumentListResponse])
+@router.get("/documents", response_model=DocumentListResponse)
 async def list_documents(
     company_id: UUID = Depends(get_company_id),
     tenant_id: UUID = Depends(validate_tenant),
@@ -522,15 +526,15 @@ async def list_documents(
     )
     documents = result.scalars().all()
     
-    response = []
+    items = []
     for doc in documents:
         chunk_result = await session.execute(
             select(DocumentChunk).where(DocumentChunk.document_id == doc.id)
         )
         chunk_count = len(chunk_result.scalars().all())
         
-        response.append(
-            DocumentListResponse(
+        items.append(
+            DocumentItemResponse(
                 id=doc.id,
                 filename=doc.filename,
                 chunk_count=chunk_count,
@@ -538,7 +542,7 @@ async def list_documents(
             )
         )
     
-    return response
+    return DocumentListResponse(documents=items)
 
 
 @router.delete("/documents/{document_id}")

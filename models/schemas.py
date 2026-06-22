@@ -1,5 +1,6 @@
 from datetime import datetime
 from uuid import UUID
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -37,3 +38,34 @@ class TenantResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class DocumentResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    tenant_id: UUID
+    filename: str
+    content_type: Optional[str] = None
+    meta: dict | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class DocumentItemResponse(BaseModel):
+    id: UUID
+    filename: str
+    chunk_count: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DocumentListResponse(BaseModel):
+    documents: list[DocumentItemResponse]
+
+class IngestionResponse(BaseModel):
+    document_id: UUID
+    filename: str
+    chunks_created: int
+    status: str
