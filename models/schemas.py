@@ -69,3 +69,49 @@ class IngestionResponse(BaseModel):
     filename: str
     chunks_created: int
     status: str
+
+
+class SourceChunk(BaseModel):
+    document_id: UUID
+    chunk_index: int
+
+
+class CompletionRequest(BaseModel):
+    query: str
+
+
+class CompletionResponse(BaseModel):
+    answer: str
+    sources: list[SourceChunk]
+
+
+class ChatCreateRequest(BaseModel):
+    user_id: Optional[str] = None
+
+
+class ChatCreateResponse(BaseModel):
+    conversation_id: UUID
+    created_at: datetime
+
+
+class MessageRequest(BaseModel):
+    message: str
+
+
+class MessageResponse(BaseModel):
+    role: str
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ChatMessageResponse(BaseModel):
+    conversation_id: UUID
+    answer: str
+    sources: list[SourceChunk]
+
+
+class ChatHistoryResponse(BaseModel):
+    messages: list[MessageResponse]

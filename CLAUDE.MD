@@ -22,7 +22,7 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 - tenants table — created & tested
 - Multi-tenant relationship setup dengan ON DELETE CASCADE
 
-**API Endpoints**
+**API Endpoints (Phase 0)**
 - ✅ Companies: POST/GET/GET{id}/PATCH/DELETE (semua tested)
 - ✅ Tenants: POST/GET/GET{id}/PATCH/DELETE dengan multi-tenant validation (semua tested)
 - ✅ Header validation (X-Company-ID, X-Tenant-ID) di core/dependencies.py
@@ -33,32 +33,37 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 - Error handling implemented per spec
 - Multi-tenant convention implemented
 
+**Phase 1: Document Ingestion Pipeline (2026-06-27)** ✅
+- ✅ Database migration (002_documents_schema.py): documents & document_chunks tables dengan pgvector
+- ✅ ORM models (models/database.py): Document & DocumentChunks dengan relationships & cascade delete
+- ✅ Pydantic schemas (models/schemas.py): DocumentResponse, DocumentItemResponse, DocumentListResponse, IngestionResponse
+- ✅ Ingestion service (services/ingestion.py): file parsing, chunking dengan tiktoken (512 token, 50 overlap)
+- ✅ Embedding service (infrastructure/voyage/index.py): Voyage AI client singleton, embed_chunks & embed_query functions
+- ✅ Knowledge router (api/v1/knowledge.py): 3 endpoints implemented & tested
+  - POST `/v1/knowledge/ingest` — upload & process dokumen
+  - GET `/v1/knowledge/documents` — list dokumen per tenant
+  - DELETE `/v1/knowledge/documents/{id}` — delete dokumen dengan cascade
+
+**Phase 2: RAG Core** (2026-06-27) ✅
+- ✅ Database migration (003_add_conversations.py): conversations & messages tables
+- ✅ ORM models: Conversations & Messages dengan relationships
+- ✅ Retrieval service (services/retrieval.py): pgvector cosine_distance search
+- ✅ LLM service (services/llm.py): Claude integration, context building, RAG system prompt
+- ✅ Pydantic schemas: CompletionRequest/Response, ChatCreate/Message/History schemas, SourceChunk
+- ✅ Completion endpoint (api/v1/completion.py): POST `/v1/completion` one-shot RAG query
+- ✅ Chat endpoints (api/v1/chat.py):
+  - POST `/v1/chat` — create conversation
+  - POST `/v1/chat/{id}/message` — multi-turn chat dengan full history
+  - GET `/v1/chat/{id}/history` — fetch conversation history
+- ✅ Router registration di api/v1/router.py
+
 ### 🔄 Next Phase
 
-1. **Document Ingestion Pipeline** (P0)
-   - Document table & schema
-   - File upload handler (PDF, DOCX, TXT)
-   - File parsing (pypdf, python-docx, unstructured)
-   - Chunking dengan tiktoken (512 token, 50 overlap)
-   - Voyage AI embedding batch
-   - `POST /v1/knowledge/ingest` endpoint
-   - `GET /v1/knowledge/documents` endpoint
-   - `DELETE /v1/knowledge/documents/{id}` endpoint
-
-2. **RAG Core** (P1)
-   - Document chunks table & pgvector indexing (HNSW)
-   - Voyage AI similarity search
-   - Claude integration (RAG system prompt)
-   - `POST /v1/completion` (one-shot) endpoint
-   - `POST /v1/chat` (create conversation) endpoint
-   - `POST /v1/chat/{id}/message` (multi-turn) endpoint
-   - `GET /v1/chat/{id}/history` endpoint
-
-3. **Testing & Docs** (P2)
-   - Unit tests for services
-   - Integration tests for endpoints
-   - API documentation
-   - Deployment guide
+**Phase 3: Testing & Docs** (P2)
+- Unit tests untuk services (retrieval, llm, ingestion)
+- Integration tests untuk endpoints
+- API documentation expansion (OpenAPI/Swagger)
+- Deployment guide & production checklist
 
 ---
 
@@ -66,43 +71,59 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 
 | Layer | Technology |
 |---|---|
-| Backend | Python 3.12+, FastAPI (async) |
-| Database | PostgreSQL 16+ dengan ekstensi pgvector |
+| Backend | Python 3.11, FastAPI (async) |
+| Database | PostgreSQL 16 + pgvector extension |
 | ORM | SQLAlchemy 2.0 (async) + asyncpg |
-| Embedding | Voyage AI API (`voyage-3` atau `voyage-3-lite`) |
-| LLM | Anthropic Claude (`claude-sonnet-4-5`) |
-| Doc parsing | `pypdf`, `python-docx`, `unstructured` |
-| Chunking | Fixed-size, 512 token per chunk, 50 token overlap |
-| Migration | Alembic |
+| Embedding | Voyage AI API (`voyage-4`) |
+| LLM | Anthropic Claude (`claude-haiku-4-5`) |
+| Doc parsing | `pypdf` (PDF), `python-docx` (DOCX), native (TXT) |
+| Chunking | Fixed-size, 512 token per chunk, 50 token overlap (tiktoken) |
+| Vector Search | pgvector with HNSW indexing (cosine similarity) |
+| Migration | Alembic with automatic model detection |
 | Validation | Pydantic v2 |
 | Config | `pydantic-settings`, `.env` file |
+| Docker | Multi-stage build, 3 services (postgres, migrator, app) |
 
 ---
 
 ## Project Structure
 
 ```
-app/
-├── main.py
+.
+├── main.py                                  # FastAPI app entry point
 ├── core/
-│   ├── config.py
-│   └── dependencies.py
-├── api/
-│   └── v1/
-│       ├── router.py
-│       ├── knowledge.py
-│       ├── completion.py
-│       └── chat.py
+│   ├── config.py                           # Pydantic settings & env vars
+│   └── dependencies.py                     # FastAPI dependency injection
+├── api/v1/
+│   ├── router.py                           # Main router aggregator
+│   ├── knowledge.py                        # Ingestion endpoints (3 routes) ✅
+│   ├── completion.py                       # One-shot RAG endpoint ✅
+│   └── chat.py                             # Multi-turn chat endpoints (3 routes) ✅
 ├── services/
-│   ├── embedding.py
-│   ├── retrieval.py
-│   ├── llm.py
-│   └── ingestion.py
+│   ├── ingestion.py                        # File parsing & chunking ✅
+│   ├── retrieval.py                        # Vector similarity search ✅
+│   └── llm.py                              # Claude integration ✅
+├── infrastructure/
+│   └── voyage/
+│       └── index.py                        # Voyage AI embedding client
 ├── models/
-│   ├── database.py
-│   └── schemas.py
-└── db/
-    └── session.py
+│   ├── database.py                         # SQLAlchemy ORM models
+│   └── schemas.py                          # Pydantic request/response schemas
+├── db/
+│   └── session.py                          # AsyncSession factory
+├── alembic/                                # Database migrations
+│   ├── versions/
+│   │   ├── 001_initial_schema.py          # Companies & tenants ✅
+│   │   ├── 002_documents_schema.py        # Documents & chunks ✅
+│   │   └── 003_add_conversations.py       # Conversations & messages ✅
+│   └── env.py                              # Migration environment config
+├── misc/docker/
+│   ├── docker-compose.yml                 # 3 services: postgres, migrator, app
+│   └── Dockerfile                          # Multi-stage Python build
+├── .env                                    # Environment variables (local)
+├── .env.example                            # Environment template
+├── requirements.txt                        # Python dependencies
+└── README.md                               # Setup & API documentation
 ```
 
 ---
@@ -145,8 +166,8 @@ CREATE TABLE documents (
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     filename TEXT NOT NULL,
-    content_type TEXT,
-    metadata JSONB DEFAULT '{}',
+    content_type VARCHAR(50),
+    meta JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -156,9 +177,10 @@ CREATE TABLE document_chunks (
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     chunk_text TEXT NOT NULL,
-    chunk_index INT NOT NULL,
+    chunk_index INTEGER NOT NULL,
     embedding vector(1024),
-    metadata JSONB DEFAULT '{}'
+    meta JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- ANN index untuk similarity search
@@ -404,10 +426,46 @@ HTTP status codes:
 
 ---
 
-## Notes untuk Claude Code
+## Implementation Notes
 
+**Database & ORM**
 - Semua database operation harus async (gunakan `AsyncSession` dari SQLAlchemy)
-- Embedding Voyage AI: gunakan input_type `"query"` untuk query user, `"document"` untuk chunks saat ingestion — ini mempengaruhi kualitas retrieval
-- Jangan hardcode `company_id` atau `tenant_id` di mana pun — selalu ambil dari header via dependency
-- Untuk file parsing, handle exception per file type — jangan biarkan satu file yang corrupt crash seluruh request
-- Vector dimension `1024` sesuai dengan model `voyage-3`. Kalau ganti model, sesuaikan dimensi di schema
+- Column metadata: gunakan `meta` bukan `metadata` (reserved keyword di SQLAlchemy)
+- Vector dimension: 1024 untuk `voyage-4`. Update schema jika ganti embedding model
+- Relationships: gunakan `cascade="all, delete-orphan"` untuk Documents → DocumentChunks
+- Migration: Alembic auto-detects SQLAlchemy models, handle async URL conversion (remove `+asyncpg` untuk migration)
+
+**Embedding & Retrieval**
+- Voyage AI client: gunakan `@lru_cache` singleton pattern untuk reuse connection
+- Input type: gunakan `"query"` untuk user queries, `"document"` untuk chunks saat ingestion
+- Vector search: HNSW index pada kolom `embedding` dengan `vector_cosine_ops` + `cosine_distance()` dalam query
+- Multi-tenant filter: semua queries harus include `company_id` AND `tenant_id` filter
+- embeddings return type: `list[list[float]]` untuk chunks, `list[float]` untuk single query
+- **Async/Sync Bridging**: Voyage AI client synchronous → gunakan `asyncio.to_thread(embed_query, query)` di async context untuk prevent event loop blocking
+
+**File Processing**
+- Supported types: PDF (pypdf), DOCX (python-docx), TXT (native)
+- Error handling: catch exceptions per file type, don't let one corrupt file crash request
+- Temp files: save to `/tmp` via `save_upload_file()`, cleanup setelah selesai di finally block
+- Chunking: fixed-size 512 token per chunk, 50 token overlap, gunakan tiktoken `cl100k_base`
+
+**API & Dependencies**
+- Headers: `X-Company-ID` dan `X-Tenant-ID` mandatory di semua knowledge endpoints
+- Validation: `get_company_id()` extracts header, `validate_tenant()` checks ownership
+- Error format: return `{"error": "code", "message": "detail"}` untuk consistency
+- Router aggregation: register knowledge router di `api/v1/router.py`
+
+**RAG & Chat (Phase 2)**
+- Retrieval: `retrieve_chunks()` di services/retrieval.py, returns list of dicts dengan `document_id`, `chunk_index`, `chunk_text`, `meta`
+- Context building: `build_context()` di services/llm.py, concatenates chunks dengan source formatting
+- One-shot: `query_completion()` untuk single query tanpa history
+- Multi-turn: `query_chat()` untuk conversations dengan history context (messages array passed to Claude)
+- System prompt: RAG template di SYSTEM_PROMPT constant, consistent across completion & chat
+- Chat history: loaded from messages table, ordered by `created_at`, passed to Claude messages array
+
+**Docker Deployment**
+- 3 services: postgres (pgvector/pgvector:pg16), migrator (runs alembic), app (uvicorn)
+- Service dependencies: app waits for migrator completion, migrator waits for postgres health
+- All env vars loaded from `.env` file via docker-compose substitution
+- Volumes: postgres_data untuk persistence, app code mounted for development
+- Docker Compose v2: removed deprecated `version:` attribute

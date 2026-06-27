@@ -118,10 +118,40 @@ uvicorn main:app --reload --port 8000
 - `DELETE /v1/tenants/{tenant_id}` — Delete tenant
   - **Headers:** `X-Company-ID`
 
-**Multi-tenant Headers (Required for tenant endpoints):**
+### Knowledge Base — Document Ingestion
+- `POST /v1/knowledge/ingest` — Upload & ingest document
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Content:** multipart/form-data, field `file` (PDF, DOCX, TXT)
+  - **Response:** document_id, chunks_created
+- `GET /v1/knowledge/documents` — List documents
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Response:** list of documents with chunk counts
+- `DELETE /v1/knowledge/documents/{document_id}` — Delete document
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+
+### Completion — One-Shot RAG Query
+- `POST /v1/completion` — Query knowledge base (no history)
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Body:** `{"query": "..."}`
+  - **Response:** answer + source chunks
+
+### Chat — Multi-Turn Conversation
+- `POST /v1/chat` — Create conversation
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Body:** `{"user_id": "..."}` (optional)
+  - **Response:** conversation_id
+- `POST /v1/chat/{conversation_id}/message` — Send message
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Body:** `{"message": "..."}`
+  - **Response:** answer + source chunks
+- `GET /v1/chat/{conversation_id}/history` — Get conversation history
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Response:** list of all messages (user + assistant)
+
+**Multi-tenant Headers (Required for knowledge base endpoints):**
 ```
 X-Company-ID: <uuid>
-X-Tenant-ID: <uuid>  # (opsional untuk most endpoints, required untuk context validation)
+X-Tenant-ID: <uuid>
 ```
 
 ## Project Structure
@@ -149,11 +179,13 @@ knowledge-base-api/
 │       ├── router.py      # Main API router
 │       ├── companies.py   # Company endpoints
 │       └── tenants.py     # Tenant endpoints
-├── services/              # (future)
-│   ├── embedding.py       # Voyage AI integration
-│   ├── retrieval.py       # Vector search
-│   ├── llm.py             # Claude integration
-│   └── ingestion.py       # Document parsing & chunking
+├── services/
+│   ├── ingestion.py       # Document parsing & chunking
+│   ├── retrieval.py       # Vector similarity search (pgvector)
+│   └── llm.py             # Claude integration & RAG context
+├── infrastructure/
+│   └── voyage/
+│       └── index.py       # Voyage AI embedding client
 └── misc/docker/
     └── docker-compose.yml # PostgreSQL container
 ```
@@ -175,45 +207,49 @@ name TEXT NOT NULL
 created_at TIMESTAMPTZ
 ```
 
-### documents (TODO)
+### documents
 ```sql
 id UUID PRIMARY KEY
-company_id UUID NOT NULL REFERENCES companies(id)
-tenant_id UUID NOT NULL REFERENCES tenants(id)
+company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE
+tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE
 filename TEXT NOT NULL
-content_type TEXT
-metadata JSONB
+content_type VARCHAR(50)
+meta JSONB DEFAULT '{}'
 created_at TIMESTAMPTZ
 ```
 
-### document_chunks (TODO)
+### document_chunks
 ```sql
 id UUID PRIMARY KEY
 document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE
-company_id UUID NOT NULL
-tenant_id UUID NOT NULL
+company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE
+tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE
 chunk_text TEXT NOT NULL
-chunk_index INT NOT NULL
+chunk_index INTEGER NOT NULL
 embedding vector(1024)
-metadata JSONB
+meta JSONB DEFAULT '{}'
+created_at TIMESTAMPTZ
+-- HNSW index: CREATE INDEX ON document_chunks USING hnsw (embedding vector_cosine_ops)
+-- Composite index: CREATE INDEX ON document_chunks (company_id, tenant_id)
 ```
 
-### conversations (TODO)
+### conversations
 ```sql
 id UUID PRIMARY KEY
-company_id UUID NOT NULL
-tenant_id UUID NOT NULL
+company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE
+tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE
 user_id TEXT
 created_at TIMESTAMPTZ
 ```
 
-### messages (TODO)
+### messages
 ```sql
 id UUID PRIMARY KEY
 conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE
 role TEXT NOT NULL CHECK (role IN ('user', 'assistant'))
 content TEXT NOT NULL
 created_at TIMESTAMPTZ
+-- Index: CREATE INDEX ON messages (conversation_id, created_at)
 ```
 
 ## Multi-Tenant Convention

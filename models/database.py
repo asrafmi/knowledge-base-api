@@ -55,3 +55,27 @@ class DocumentChunks(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     document = relationship("Documents", back_populates="chunks")
+
+
+class Conversations(Base):
+    __tablename__ = "conversations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+
+    messages = relationship("Messages", back_populates="conversation", cascade="all, delete-orphan")
+
+
+class Messages(Base):
+    __tablename__ = "messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(10), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+    conversation = relationship("Conversations", back_populates="messages")
