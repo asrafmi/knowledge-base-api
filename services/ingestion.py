@@ -27,7 +27,7 @@ def parse_pdf(file_path: str) -> str:
     reader = PdfReader(file_path)
     text = ""
     for page in reader.pages:
-        text += page.extract_text() + "\n"
+        text += clean_chunk_text(page.extract_text()) + "\n"
     return text
 
 
@@ -36,14 +36,14 @@ def parse_docx(file_path: str) -> str:
     doc = DocxDocument(file_path)
     text = ""
     for para in doc.paragraphs:
-        text += para.text + "\n"
+        text += clean_chunk_text(para.text) + "\n"
     return text
 
 
 def parse_txt(file_path: str) -> str:
     """Read text from TXT file"""
     with open(file_path, "r", encoding="utf-8") as f:
-        return f.read()
+        return clean_chunk_text(f.read())
 
 
 def parse_file(file_path: str, content_type: str) -> str:
@@ -64,3 +64,9 @@ async def save_upload_file(upload_file: UploadFile) -> str:
         content = await upload_file.read()
         tmp_file.write(content)
         return tmp_file.name
+
+def clean_chunk_text(text: str) -> str:
+    """Remove unwanted characters and whitespace from chunk text"""
+    text = ' '.join(text.split())
+    text = text.replace('\x00', '').replace('\ufffd', '')
+    return text.strip()
