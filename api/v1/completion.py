@@ -1,12 +1,14 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dependencies import get_company_id, validate_tenant
+from core.sse import sse_event
 from db.session import get_session
 from models.schemas import CompletionRequest, CompletionResponse, SourceChunk
 from services.retrieval import retrieve_chunks
-from services.llm import query_completion
+from services.llm import query_completion, stream_completion
 
 router = APIRouter(prefix="/completion", tags=["completion"])
 
@@ -71,3 +73,64 @@ async def completion(
     ]
 
     return CompletionResponse(answer=answer, sources=sources)
+
+
+@router.post("/stream")
+async def completion_stream(
+    request: CompletionRequest,
+    company_id: UUID = Depends(get_company_id),
+    tenant_id: UUID = Depends(validate_tenant),
+    session: AsyncSession = Depends(get_session),
+):
+    """Query knowledge base and stream answer token-by-token (SSE)"""
+
+    if not request.query.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "empty_query",
+                "message": "Query cannot be empty",
+            },
+        )
+
+    try:
+        chunks = await retrieve_chunks(
+            query=request.query,
+            company_id=company_id,
+            tenant_id=tenant_id,
+            session=session,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "retrieval_error",
+                "message": f"Failed to retrieve context: {str(e)}",
+            },
+        )
+
+    if not chunks:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "no_context",
+                "message": "No relevant documents found in knowledge base",
+            },
+        )
+
+    sources = [
+        {"document_id": str(chunk["document_id"]), "chunk_index": chunk["chunk_index"]}
+        for chunk in chunks
+    ]
+
+    async def event_generator():
+        try:
+            async for text in stream_completion(request.query, chunks):
+                yield sse_event({"text": text})
+            yield sse_event({"sources": sources}, event="done")
+        except Exception as e:
+            yield sse_event(
+                {"error": "completion_error", "message": str(e)}, event="error"
+            )
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
