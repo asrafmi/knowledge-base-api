@@ -115,3 +115,12 @@ class ChatMessageResponse(BaseModel):
 
 class ChatHistoryResponse(BaseModel):
     messages: list[MessageResponse]
+
+class ConversationListItemResponse(BaseModel):
+    conversation_id: UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+class ConversationListResponse(BaseModel):
+    conversations: list[ConversationListItemResponse]

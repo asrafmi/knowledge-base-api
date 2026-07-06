@@ -5,6 +5,7 @@ from api.v1.tenants import router as tenants_router
 from api.v1.knowledge import router as knowledge_router
 from api.v1.completion import router as completion_router
 from api.v1.chat import router as chat_router
+from api.v1.conversation import router as conversation_router
 
 router = APIRouter(prefix="/v1")
 
@@ -13,3 +14,5 @@ router.include_router(tenants_router)
 router.include_router(knowledge_router)
 router.include_router(completion_router)
 router.include_router(chat_router)
+router.include_router(conversation_router)
+
