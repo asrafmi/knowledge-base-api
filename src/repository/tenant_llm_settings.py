@@ -19,6 +19,7 @@ async def upsert_repo(
     provider: str,
     model: str,
     api_key_encrypted: str | None,
+    base_url: str | None,
     system_prompt: str | None,
     session: AsyncSession,
 ) -> TenantLLMSettings:
@@ -31,6 +32,7 @@ async def upsert_repo(
     settings_row.provider = provider
     settings_row.model = model
     settings_row.api_key_encrypted = api_key_encrypted
+    settings_row.base_url = base_url
     settings_row.system_prompt = system_prompt
 
     await session.commit()

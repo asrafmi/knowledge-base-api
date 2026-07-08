@@ -84,6 +84,13 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
   - `PUT /v1/llm-settings` — set provider, model, API key (opsional), system prompt custom
 - ✅ `services/chat.py` & `controller/v1/completion.py` di-wire ulang: sebelum manggil LLM, resolve dulu provider/model/prompt tenant via `resolve_llm_config_service`, ketimbang hardcode Anthropic
 
+**Phase 5.1: Ollama (Self-Hosted) Provider (2026-07-10)** ✅
+- ✅ Database migration (005_add_base_url.py): kolom `base_url` (nullable) di `tenant_llm_settings`, untuk provider self-hosted yang butuh alamat server, bukan API key
+- ✅ `infrastructure/llm/ollama/index.py` — `OllamaProvider`, pakai `httpx` langsung ke REST API Ollama (`POST {base_url}/api/chat`), tidak ada dependency SDK tambahan. Streaming di-parse dari newline-delimited JSON (format asli Ollama, bukan SSE)
+- ✅ `factory.get_llm_provider()` cabang khusus untuk `ollama`: tidak pernah mencari API key, langsung resolve `base_url` (fallback ke `DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"` kalau tenant tidak isi)
+- ✅ `PROVIDER_MODELS["ollama"] = []` — model utk provider ini **tidak divalidasi** terhadap whitelist (berbeda dari anthropic/openai/gemini), karena tergantung model apa yang di-`pull` tenant di server Ollama mereka sendiri
+- ✅ `LLMSettingsUpdate`/`LLMSettingsResponse` (`models/schemas.py`) + `upsert_repo` (`repository/tenant_llm_settings.py`) diperluas dengan field `base_url`
+
 ### 🔄 Next Phase
 
 **Phase 6: Testing & Docs** (P2)
@@ -102,7 +109,7 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 | Database | PostgreSQL 16 + pgvector extension |
 | ORM | SQLAlchemy 2.0 (async) + asyncpg |
 | Embedding | Voyage AI API (`voyage-4`) |
-| LLM | Multi-provider per tenant: Anthropic Claude, OpenAI, Google Gemini (default: `claude-haiku-4-5`, fallback ke API key kita sendiri) |
+| LLM | Multi-provider per tenant: Anthropic Claude, OpenAI, Google Gemini, atau Ollama self-hosted (default: `claude-haiku-4-5`, fallback ke API key kita sendiri — Ollama tidak butuh API key sama sekali) |
 | Secrets | `cryptography` (Fernet) untuk enkripsi API key tenant di DB |
 | Doc parsing | `pypdf` (PDF), `python-docx` (DOCX), native (TXT) |
 | Chunking | Fixed-size, 512 token per chunk, 50 token overlap (tiktoken) |
@@ -164,10 +171,11 @@ Seluruh source code ada di `src/`, dipisah 3 layer ala NestJS: **controller → 
 │   │   │   └── index.py                    # Voyage AI embedding client
 │   │   └── llm/
 │   │       ├── base.py                     # LLMProvider ABC, guardrail prompt, model whitelist ✅
-│   │       ├── factory.py                  # get_llm_provider(provider, api_key) ✅
+│   │       ├── factory.py                  # get_llm_provider(provider, api_key, base_url) ✅
 │   │       ├── anthropic/index.py          # AnthropicProvider ✅
 │   │       ├── openai/index.py             # OpenAIProvider ✅
-│   │       └── gemini/index.py             # GeminiProvider ✅
+│   │       ├── gemini/index.py             # GeminiProvider ✅
+│   │       └── ollama/index.py             # OllamaProvider (self-hosted, httpx, no API key) ✅
 │   ├── models/
 │   │   ├── database.py                     # SQLAlchemy ORM models
 │   │   └── schemas.py                      # Pydantic request/response schemas
@@ -178,7 +186,8 @@ Seluruh source code ada di `src/`, dipisah 3 layer ala NestJS: **controller → 
 │       │   ├── 001_initial_schema.py      # Companies & tenants ✅
 │       │   ├── 002_documents_schema.py    # Documents & chunks ✅
 │       │   ├── 003_add_conversations.py   # Conversations & messages ✅
-│       │   └── 004_tenant_llm_settings.py # Tenant LLM provider settings ✅
+│       │   ├── 004_tenant_llm_settings.py # Tenant LLM provider settings ✅
+│       │   └── 005_add_base_url.py        # base_url column untuk provider self-hosted (Ollama) ✅
 │       └── env.py                          # Migration environment config
 ├── misc/docker/
 │   ├── docker-compose.yml                 # 3 services: postgres, migrator, app
@@ -282,7 +291,8 @@ CREATE TABLE tenant_llm_settings (
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     provider VARCHAR(20) NOT NULL DEFAULT 'anthropic',
     model VARCHAR(100) NOT NULL DEFAULT 'claude-haiku-4-5',
-    api_key_encrypted TEXT,   -- NULL = pakai API key kita sendiri (fallback)
+    api_key_encrypted TEXT,   -- NULL = pakai API key kita sendiri (fallback). Tidak dipakai untuk provider 'ollama'
+    base_url VARCHAR(255),    -- Khusus provider 'ollama' (self-hosted); NULL = fallback ke http://localhost:11434
     system_prompt TEXT,      -- NULL = pakai DEFAULT_SYSTEM_PROMPT
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
@@ -442,7 +452,7 @@ Ambil semua pesan dalam sebuah conversation.
 
 ### LLM Settings — Per-Tenant Provider Configuration
 
-Tenant bisa memilih provider LLM (Anthropic/OpenAI/Gemini), model, API key sendiri (opsional), dan system prompt custom. Setting berlaku untuk semua endpoint RAG (`/v1/completion`, `/v1/chat/*`) dalam tenant itu — tidak ada override per-request.
+Tenant bisa memilih provider LLM (Anthropic/OpenAI/Gemini/Ollama), model, API key sendiri (opsional untuk provider cloud, tidak dipakai sama sekali untuk Ollama), dan system prompt custom. Setting berlaku untuk semua endpoint RAG (`/v1/completion`, `/v1/chat/*`) dalam tenant itu — tidak ada override per-request.
 
 #### `GET /v1/llm-settings`
 
@@ -455,6 +465,7 @@ Lihat setting LLM tenant saat ini. Kalau belum pernah di-set, return default (`a
   "provider": "anthropic",
   "model": "claude-haiku-4-5",
   "has_custom_api_key": false,
+  "base_url": null,
   "system_prompt": null,
   "updated_at": null
 }
@@ -466,7 +477,7 @@ Lihat setting LLM tenant saat ini. Kalau belum pernah di-set, return default (`a
 Set atau update konfigurasi LLM tenant.
 
 - **Headers:** `X-Company-ID`, `X-Tenant-ID`
-- **Request:**
+- **Request (provider cloud, mis. OpenAI):**
 ```json
 {
   "provider": "openai",
@@ -475,15 +486,25 @@ Set atau update konfigurasi LLM tenant.
   "system_prompt": "Kamu adalah asisten HR yang ramah."
 }
 ```
-- `api_key`: opsional. Kalau `null`/tidak diisi, fallback ke API key kita sendiri untuk provider tersebut.
+- **Request (provider Ollama, self-hosted):**
+```json
+{
+  "provider": "ollama",
+  "model": "llama3.2",
+  "base_url": "http://my-ollama-server:11434",
+  "system_prompt": "Kamu adalah asisten HR yang ramah."
+}
+```
+- `api_key`: opsional, **hanya relevan untuk `anthropic`/`openai`/`gemini`**. Kalau `null`/tidak diisi, fallback ke API key kita sendiri untuk provider tersebut. Diabaikan sepenuhnya untuk `provider: "ollama"`.
+- `base_url`: opsional, **hanya relevan untuk `provider: "ollama"`**. Alamat server Ollama tenant. Kalau `null`/tidak diisi, fallback ke `http://localhost:11434`. Diabaikan untuk provider cloud lain.
 - `system_prompt`: opsional, custom persona/gaya bahasa. **RAG guardrail (jawab hanya dari konteks, jangan mengarang) selalu ditempel otomatis di belakang prompt custom ini** — tidak bisa dioverride tenant.
-- Validasi: `provider` harus salah satu dari `anthropic`/`openai`/`gemini`; `model` harus ada di whitelist provider tersebut (lihat `PROVIDER_MODELS` di `infrastructure/llm/base.py`) — 400 error kalau tidak valid.
+- Validasi: `provider` harus salah satu dari `anthropic`/`openai`/`gemini`/`ollama`. Untuk `anthropic`/`openai`/`gemini`, `model` harus ada di whitelist provider tersebut (lihat `PROVIDER_MODELS` di `infrastructure/llm/base.py`) — 400 error kalau tidak valid. Untuk `ollama`, `model` **tidak divalidasi** (`PROVIDER_MODELS["ollama"] = []` menandakan skip whitelist) karena tergantung model apa yang di-`pull` tenant di server mereka sendiri.
 
 ---
 
 ## RAG Prompt & Multi-Provider LLM
 
-Sejak Phase 5, LLM tidak lagi hardcoded ke Anthropic. Semua provider (`infrastructure/llm/anthropic|openai|gemini/index.py`) implement interface `LLMProvider` di `infrastructure/llm/base.py`:
+Sejak Phase 5, LLM tidak lagi hardcoded ke Anthropic. Semua provider (`infrastructure/llm/anthropic|openai|gemini|ollama/index.py`) implement interface `LLMProvider` di `infrastructure/llm/base.py`:
 
 ```python
 class LLMProvider(ABC):
@@ -592,7 +613,8 @@ HTTP status codes:
 - Retrieval: `retrieve_chunks()` di `src/services/retrieval.py`, returns list of dicts dengan `document_id`, `chunk_index`, `chunk_text`, `meta` — query similarity search-nya sendiri ada di `src/repository/document_chunks.py`
 - Context building: `build_context()` di `src/infrastructure/llm/base.py`, provider-agnostic, concatenates chunks dengan source formatting
 - LLM calls: tidak ada lagi `query_completion()`/`query_chat()` global. Setiap tempat yang butuh jawaban LLM wajib panggil `resolve_llm_config_service(tenant_id, session)` dulu (dari `src/services/tenant_llm_settings.py`) untuk dapat `(provider_instance, model, system_prompt)`, baru panggil `provider.query(system_prompt, messages, model)` (one-shot) atau `provider.stream(...)` (SSE)
-- Provider resolution: `get_llm_provider(provider, api_key)` di `src/infrastructure/llm/factory.py` — `api_key=None` fallback ke API key kita sendiri (`settings.anthropic_api_key` / `openai_api_key` / `gemini_api_key`)
+- Provider resolution: `get_llm_provider(provider, api_key, base_url)` di `src/infrastructure/llm/factory.py` — untuk provider cloud (anthropic/openai/gemini), `api_key=None` fallback ke API key kita sendiri (`settings.anthropic_api_key` / `openai_api_key` / `gemini_api_key`); untuk `provider="ollama"`, `api_key` diabaikan sepenuhnya dan `base_url=None` fallback ke `DEFAULT_OLLAMA_BASE_URL` (`http://localhost:11434`)
+- Ollama: self-hosted, tanpa API key. `OllamaProvider` (`src/infrastructure/llm/ollama/index.py`) pakai `httpx` langsung ke `POST {base_url}/api/chat` — tidak ada SDK tambahan. Response stream Ollama berupa newline-delimited JSON (bukan SSE), di-parse baris per baris
 - System prompt: `(tenant.system_prompt or DEFAULT_SYSTEM_PROMPT) + RAG_GUARDRAIL_PROMPT`, guardrail selalu ditempel tidak bisa dioverride tenant — lihat section "RAG Prompt & Multi-Provider LLM"
 - Chat & conversation business logic (create, send message, get history, list conversations, streaming) ada di `src/services/chat.py`
 - Chat history: loaded via `src/repository/messages.py`, ordered by `created_at`, passed sebagai `messages` array ke provider (dinormalisasi `{"role", "content"}`, tiap provider adapt ke format SDK masing-masing)

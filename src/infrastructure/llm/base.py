@@ -14,7 +14,12 @@ PROVIDER_MODELS: dict[str, list[str]] = {
     "anthropic": ["claude-sonnet-4-5-20250929", "claude-haiku-4-5"],
     "openai": ["gpt-5.4", "gpt-5.4-mini"],
     "gemini": ["gemini-2.5-flash", "gemini-3-flash"],
+    # ollama is self-hosted — model names depend on whatever the tenant pulled on their
+    # own server, so an empty list here signals "skip whitelist validation" for this provider.
+    "ollama": [],
 }
+
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
 
 def build_context(chunks: list[dict]) -> str:

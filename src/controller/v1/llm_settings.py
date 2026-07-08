@@ -35,6 +35,7 @@ async def update_llm_settings(
         settings_update.provider,
         settings_update.model,
         settings_update.api_key,
+        settings_update.base_url,
         settings_update.system_prompt,
         session,
     )

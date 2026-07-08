@@ -41,6 +41,7 @@ class TenantLLMSettings(Base):
     provider = Column(String(20), nullable=False, default="anthropic")
     model = Column(String(100), nullable=False, default="claude-haiku-4-5")
     api_key_encrypted = Column(Text, nullable=True)
+    base_url = Column(String(255), nullable=True)
     system_prompt = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

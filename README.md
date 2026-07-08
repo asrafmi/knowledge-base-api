@@ -1,6 +1,6 @@
 # Knowledge Base API
 
-REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun dengan FastAPI + PostgreSQL (pgvector) + Voyage AI untuk embedding. LLM provider (Anthropic Claude, OpenAI, atau Google Gemini) dan model bisa dikonfigurasi per tenant.
+REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun dengan FastAPI + PostgreSQL (pgvector) + Voyage AI untuk embedding. LLM provider (Anthropic Claude, OpenAI, Google Gemini, atau Ollama self-hosted) dan model bisa dikonfigurasi per tenant.
 
 ## Quick Start
 
@@ -164,15 +164,16 @@ uvicorn main:app --reload --port 8000
   - **Response:** list of conversation_id + created_at
 
 ### LLM Settings — Per-Tenant Provider Configuration
-Tenant bisa memilih provider LLM (`anthropic`/`openai`/`gemini`), model, API key sendiri (opsional — fallback ke API key kita kalau kosong), dan system prompt custom. Berlaku untuk semua endpoint RAG (`/v1/completion`, `/v1/chat/*`) dalam tenant tersebut.
+Tenant bisa memilih provider LLM (`anthropic`/`openai`/`gemini`/`ollama`), model, API key sendiri (opsional — fallback ke API key kita kalau kosong), dan system prompt custom. Berlaku untuk semua endpoint RAG (`/v1/completion`, `/v1/chat/*`) dalam tenant tersebut.
 - `GET /v1/llm-settings` — Lihat setting saat ini
   - **Headers:** `X-Company-ID`, `X-Tenant-ID`
-  - **Response:** `provider`, `model`, `has_custom_api_key` (boolean, API key tidak pernah dikembalikan), `system_prompt`, `updated_at`
+  - **Response:** `provider`, `model`, `has_custom_api_key` (boolean, API key tidak pernah dikembalikan), `base_url`, `system_prompt`, `updated_at`
 - `PUT /v1/llm-settings` — Set/update provider, model, API key, system prompt
   - **Headers:** `X-Company-ID`, `X-Tenant-ID`
-  - **Body:** `{"provider": "openai", "model": "gpt-5.1", "api_key": "sk-...", "system_prompt": "..."}` (`api_key` & `system_prompt` opsional)
-  - **Validasi:** `provider` harus `anthropic`/`openai`/`gemini`, `model` harus ada di whitelist provider tersebut — 400 kalau tidak valid
+  - **Body:** `{"provider": "openai", "model": "gpt-5.1", "api_key": "sk-...", "base_url": null, "system_prompt": "..."}` (`api_key`, `base_url`, `system_prompt` semuanya opsional)
+  - **Validasi:** `provider` harus `anthropic`/`openai`/`gemini`/`ollama`. Untuk `anthropic`/`openai`/`gemini`, `model` harus ada di whitelist provider tersebut — 400 kalau tidak valid. Untuk `ollama`, `model` bebas (tidak divalidasi) karena tergantung model apa yang di-pull tenant di server mereka sendiri.
   - **Catatan:** system prompt custom selalu digabung dengan RAG guardrail wajib (jawab hanya dari konteks, jangan mengarang) yang tidak bisa di-override
+  - **Ollama (self-hosted):** provider ini **tidak butuh API key**. Isi `base_url` dengan alamat server Ollama tenant (mis. `http://localhost:11434` atau URL server mereka); kalau tidak diisi, fallback ke `http://localhost:11434`.
 
 **Multi-tenant Headers (Required for knowledge base endpoints):**
 ```
@@ -236,10 +237,11 @@ knowledge-base-api/
 │   │   │   └── index.py                    # Voyage AI embedding client
 │   │   └── llm/
 │   │       ├── base.py                     # LLMProvider ABC, guardrail prompt, model whitelist
-│   │       ├── factory.py                  # get_llm_provider(provider, api_key)
+│   │       ├── factory.py                  # get_llm_provider(provider, api_key, base_url)
 │   │       ├── anthropic/index.py          # AnthropicProvider
 │   │       ├── openai/index.py             # OpenAIProvider
-│   │       └── gemini/index.py             # GeminiProvider
+│   │       ├── gemini/index.py             # GeminiProvider
+│   │       └── ollama/index.py             # OllamaProvider (self-hosted, no API key, httpx-based)
 │   └── alembic/                            # Database migrations
 │       ├── env.py                          # Alembic configuration
 │       ├── versions/                       # Migration files
@@ -318,7 +320,8 @@ tenant_id UUID NOT NULL UNIQUE REFERENCES tenants(id) ON DELETE CASCADE
 company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE
 provider VARCHAR(20) NOT NULL DEFAULT 'anthropic'
 model VARCHAR(100) NOT NULL DEFAULT 'claude-haiku-4-5'
-api_key_encrypted TEXT          -- NULL = pakai API key kita sendiri (fallback)
+api_key_encrypted TEXT          -- NULL = pakai API key kita sendiri (fallback). Tidak dipakai untuk provider 'ollama'
+base_url VARCHAR(255)           -- Khusus provider 'ollama' (self-hosted); NULL = fallback ke http://localhost:11434
 system_prompt TEXT              -- NULL = pakai default system prompt
 created_at TIMESTAMPTZ
 updated_at TIMESTAMPTZ
@@ -395,7 +398,7 @@ ruff check . --fix
 - [x] SSE streaming untuk completion & chat
 - [x] Conversation listing (`GET /v1/conversation`)
 - [x] Layered architecture refactor (controller → service → repository)
-- [x] Per-tenant LLM provider settings (`GET/PUT /v1/llm-settings`) — Anthropic, OpenAI, Gemini dengan encrypted API key & custom system prompt
+- [x] Per-tenant LLM provider settings (`GET/PUT /v1/llm-settings`) — Anthropic, OpenAI, Gemini, Ollama (self-hosted) dengan encrypted API key & custom system prompt
 - [ ] Unit & integration tests
 - [ ] API documentation expansion (OpenAPI/Swagger detail)
 - [ ] Production deployment guide

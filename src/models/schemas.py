@@ -130,6 +130,7 @@ class LLMSettingsUpdate(BaseModel):
     provider: str
     model: str
     api_key: Optional[str] = None
+    base_url: Optional[str] = None
     system_prompt: Optional[str] = None
 
 
@@ -137,6 +138,7 @@ class LLMSettingsResponse(BaseModel):
     provider: str
     model: str
     has_custom_api_key: bool
+    base_url: Optional[str] = None
     system_prompt: Optional[str] = None
     updated_at: Optional[datetime] = None
 
