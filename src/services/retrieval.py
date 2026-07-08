@@ -4,8 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pgvector.sqlalchemy import Vector
 
-from models.database import DocumentChunks
-from infrastructure.voyage.index import embed_query
+from src.models.database import DocumentChunks
+from src.infrastructure.voyage.index import embed_query
 
 
 async def retrieve_chunks(

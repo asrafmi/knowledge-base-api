@@ -3,10 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.dependencies import get_company_id, validate_tenant
-from db.session import get_session
-from models.database import Conversations, Messages
-from models.schemas import (
+from src.core.dependencies import get_company_id, validate_tenant
+from src.db.session import get_session
+from src.models.database import Conversations, Messages
+from src.models.schemas import (
     ConversationListItemResponse,
     ConversationListResponse,
 )

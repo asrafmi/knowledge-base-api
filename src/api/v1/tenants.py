@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.dependencies import get_company_id
-from db.session import get_session
-from models.database import Company, Tenant
-from models.schemas import TenantCreate, TenantResponse, TenantUpdate
+from src.core.dependencies import get_company_id
+from src.db.session import get_session
+from src.models.database import Company, Tenant
+from src.models.schemas import TenantCreate, TenantResponse, TenantUpdate
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 

@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.session import get_session
-from models.database import Company
-from models.schemas import CompanyCreate, CompanyResponse, CompanyUpdate
+from src.db.session import get_session
+from src.models.database import Company
+from src.models.schemas import CompanyCreate, CompanyResponse, CompanyUpdate
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 

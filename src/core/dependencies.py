@@ -4,8 +4,8 @@ from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.session import get_session
-from models.database import Tenant
+from src.db.session import get_session
+from src.models.database import Tenant
 
 
 async def get_company_id(x_company_id: UUID = Header(...)) -> UUID:

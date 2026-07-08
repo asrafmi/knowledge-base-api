@@ -3,12 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.dependencies import get_company_id, validate_tenant
-from core.sse import sse_event
-from db.session import get_session
-from models.schemas import CompletionRequest, CompletionResponse, SourceChunk
-from services.retrieval import retrieve_chunks
-from services.llm import query_completion, stream_completion
+from src.core.dependencies import get_company_id, validate_tenant
+from src.core.sse import sse_event
+from src.db.session import get_session
+from src.models.schemas import CompletionRequest, CompletionResponse, SourceChunk
+from src.services.retrieval import retrieve_chunks
+from src.services.llm import query_completion, stream_completion
 
 router = APIRouter(prefix="/completion", tags=["completion"])
 

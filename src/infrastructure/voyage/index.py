@@ -1,5 +1,5 @@
 import voyageai
-from core.config import settings
+from src.core.config import settings
 from functools import lru_cache
 
 

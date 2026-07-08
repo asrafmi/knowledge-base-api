@@ -5,12 +5,12 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.dependencies import get_company_id, validate_tenant
-from db.session import get_session
-from models.database import Documents, DocumentChunks
-from models.schemas import DocumentListResponse, IngestionResponse, DocumentItemResponse
-from infrastructure.voyage.index import embed_chunks
-from services.ingestion import chunk_text, parse_file, save_upload_file
+from src.core.dependencies import get_company_id, validate_tenant
+from src.db.session import get_session
+from src.models.database import Documents, DocumentChunks
+from src.models.schemas import DocumentListResponse, IngestionResponse, DocumentItemResponse
+from src.infrastructure.voyage.index import embed_chunks
+from src.services.ingestion import chunk_text, parse_file, save_upload_file
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 

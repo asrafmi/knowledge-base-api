@@ -5,11 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi.responses import StreamingResponse
 
-from core.dependencies import get_company_id, validate_tenant
-from core.sse import sse_event
-from db.session import get_session
-from models.database import Conversations, Messages
-from models.schemas import (
+from src.core.dependencies import get_company_id, validate_tenant
+from src.core.sse import sse_event
+from src.db.session import get_session
+from src.models.database import Conversations, Messages
+from src.models.schemas import (
     ChatCreateRequest,
     ChatCreateResponse,
     MessageRequest,
@@ -18,8 +18,8 @@ from models.schemas import (
     MessageResponse,
     SourceChunk,
 )
-from services.retrieval import retrieve_chunks
-from services.llm import query_chat, stream_chat
+from src.services.retrieval import retrieve_chunks
+from src.services.llm import query_chat, stream_chat
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
