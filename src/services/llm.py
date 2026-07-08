@@ -2,7 +2,7 @@ import asyncio
 from typing import AsyncIterator
 
 from anthropic import Anthropic
-from core.config import settings
+from src.core.config import settings
 
 SYSTEM_PROMPT = """Kamu adalah asisten yang menjawab pertanyaan berdasarkan dokumen yang tersedia.
 
