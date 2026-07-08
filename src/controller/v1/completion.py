@@ -8,7 +8,7 @@ from src.core.sse import sse_event
 from src.db.session import get_session
 from src.models.schemas import CompletionRequest, CompletionResponse, SourceChunk
 from src.services.retrieval import retrieve_chunks
-from src.services.llm import query_completion, stream_completion
+from src.infrastructure.llm.anthropic.index import query_completion, stream_completion
 
 router = APIRouter(prefix="/completion", tags=["completion"])
 

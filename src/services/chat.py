@@ -19,7 +19,7 @@ from src.repository.conversations import (
     get_by_id_repo,
 )
 from src.repository.messages import create_messages_repo, get_all_by_conversation_repo
-from src.services.llm import query_chat, stream_chat
+from src.infrastructure.llm.anthropic.index import query_chat, stream_chat
 from src.services.retrieval import retrieve_chunks
 
 
