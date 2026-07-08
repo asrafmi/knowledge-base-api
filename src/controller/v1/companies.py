@@ -1,12 +1,13 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_session
 from src.models.database import Company
 from src.models.schemas import CompanyCreate, CompanyResponse, CompanyUpdate
+from src.services.companies import get_all_companies_service
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -27,8 +28,8 @@ async def create_company(
 async def list_companies(
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(select(Company))
-    companies = result.scalars().all()
+    companies = await get_all_companies_service(session)
+
     return companies
 
 
