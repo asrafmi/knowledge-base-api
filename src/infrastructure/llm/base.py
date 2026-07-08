@@ -11,9 +11,9 @@ RAG_GUARDRAIL_PROMPT = """Aturan wajib (tidak bisa diubah):
 - Jangan mengarang jawaban"""
 
 PROVIDER_MODELS: dict[str, list[str]] = {
-    "anthropic": ["claude-sonnet-4.5", "claude-haiku-4-5"],
-    "openai": ["gpt-5.1", "gpt-5.1-mini"],
-    "gemini": ["gemini-3-pro", "gemini-3-flash"],
+    "anthropic": ["claude-sonnet-4-5-20250929", "claude-haiku-4-5"],
+    "openai": ["gpt-5.4", "gpt-5.4-mini"],
+    "gemini": ["gemini-2.5-flash", "gemini-3-flash"],
 }
 
 
