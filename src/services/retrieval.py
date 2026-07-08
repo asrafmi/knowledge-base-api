@@ -1,11 +1,9 @@
 import asyncio
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from pgvector.sqlalchemy import Vector
 
-from src.models.database import DocumentChunks
 from src.infrastructure.voyage.index import embed_query
+from src.repository.document_chunks import search_by_similarity_repo
 
 
 async def retrieve_chunks(
@@ -21,18 +19,9 @@ async def retrieve_chunks(
     """
     query_embedding = await asyncio.to_thread(embed_query, query)
 
-    result = await session.execute(
-        select(DocumentChunks)
-        .where(
-            (DocumentChunks.company_id == company_id)
-            & (DocumentChunks.tenant_id == tenant_id)
-            & (DocumentChunks.embedding.is_not(None))
-        )
-        .order_by(DocumentChunks.embedding.cosine_distance(query_embedding))
-        .limit(top_k)
+    chunks = await search_by_similarity_repo(
+        query_embedding, company_id, tenant_id, top_k, session
     )
-
-    chunks = result.scalars().all()
 
     return [
         {

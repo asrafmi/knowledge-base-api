@@ -1,6 +1,5 @@
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi.responses import StreamingResponse
@@ -8,18 +7,21 @@ from fastapi.responses import StreamingResponse
 from src.core.dependencies import get_company_id, validate_tenant
 from src.core.sse import sse_event
 from src.db.session import get_session
-from src.models.database import Conversations, Messages
 from src.models.schemas import (
     ChatCreateRequest,
     ChatCreateResponse,
     MessageRequest,
     ChatMessageResponse,
     ChatHistoryResponse,
-    MessageResponse,
-    SourceChunk,
 )
-from src.services.retrieval import retrieve_chunks
-from src.services.llm import query_chat, stream_chat
+from src.services.chat import (
+    create_conversation_service,
+    get_history_service,
+    prepare_message_stream_service,
+    save_stream_result_service,
+    send_message_service,
+    stream_message_service,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -32,19 +34,7 @@ async def create_conversation(
     session: AsyncSession = Depends(get_session),
 ):
     """Create new conversation"""
-
-    conversation = Conversations(
-        company_id=company_id,
-        tenant_id=tenant_id,
-        user_id=request.user_id,
-    )
-    session.add(conversation)
-    await session.commit()
-
-    return ChatCreateResponse(
-        conversation_id=conversation.id,
-        created_at=conversation.created_at,
-    )
+    return await create_conversation_service(company_id, tenant_id, request.user_id, session)
 
 
 @router.post("/{conversation_id}/message", response_model=ChatMessageResponse)
@@ -56,108 +46,8 @@ async def send_message(
     session: AsyncSession = Depends(get_session),
 ):
     """Send message to conversation and get response"""
-
-    if not request.message.strip():
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "empty_message",
-                "message": "Message cannot be empty",
-            },
-        )
-
-    result = await session.execute(
-        select(Conversations).where(
-            (Conversations.id == conversation_id)
-            & (Conversations.company_id == company_id)
-            & (Conversations.tenant_id == tenant_id)
-        )
-    )
-    conversation = result.scalar_one_or_none()
-
-    if not conversation:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "conversation_not_found",
-                "message": "Conversation not found or does not belong to this tenant",
-            },
-        )
-
-    # Retrieve context
-    try:
-        chunks = await retrieve_chunks(
-            query=request.message,
-            company_id=company_id,
-            tenant_id=tenant_id,
-            session=session,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "retrieval_error",
-                "message": f"Failed to retrieve context: {str(e)}",
-            },
-        )
-
-    if not chunks:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "no_context",
-                "message": "No relevant documents found in knowledge base",
-            },
-        )
-
-    # Fetch conversation history
-    history_result = await session.execute(
-        select(Messages)
-        .where(Messages.conversation_id == conversation_id)
-        .order_by(Messages.created_at.asc())
-    )
-    history_messages = history_result.scalars().all()
-
-    # Build history for Claude (without last message which will be the new one)
-    history = [
-        {"role": msg.role, "content": msg.content} for msg in history_messages
-    ]
-
-    # Generate response
-    try:
-        answer = query_chat(request.message, chunks, history=history)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "completion_error",
-                "message": f"Failed to generate answer: {str(e)}",
-            },
-        )
-
-    # Save messages to database
-    user_msg = Messages(
-        conversation_id=conversation_id,
-        role="user",
-        content=request.message,
-    )
-    assistant_msg = Messages(
-        conversation_id=conversation_id,
-        role="assistant",
-        content=answer,
-    )
-    session.add_all([user_msg, assistant_msg])
-    await session.commit()
-
-    sources = [
-        SourceChunk(document_id=chunk["document_id"], chunk_index=chunk["chunk_index"])
-        for chunk in chunks
-    ]
-
-    return ChatMessageResponse(
-        conversation_id=conversation_id,
-        answer=answer,
-        sources=sources,
+    return await send_message_service(
+        conversation_id, request.message, company_id, tenant_id, session
     )
 
 
@@ -169,42 +59,7 @@ async def get_history(
     session: AsyncSession = Depends(get_session),
 ):
     """Get conversation history"""
-
-    result = await session.execute(
-        select(Conversations).where(
-            (Conversations.id == conversation_id)
-            & (Conversations.company_id == company_id)
-            & (Conversations.tenant_id == tenant_id)
-        )
-    )
-    conversation = result.scalar_one_or_none()
-
-    if not conversation:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "conversation_not_found",
-                "message": "Conversation not found or does not belong to this tenant",
-            },
-        )
-
-    messages_result = await session.execute(
-        select(Messages)
-        .where(Messages.conversation_id == conversation_id)
-        .order_by(Messages.created_at.asc())
-    )
-    messages = messages_result.scalars().all()
-
-    return ChatHistoryResponse(
-        messages=[
-            MessageResponse(
-                role=msg.role,
-                content=msg.content,
-                created_at=msg.created_at,
-            )
-            for msg in messages
-        ]
-    )
+    return await get_history_service(conversation_id, company_id, tenant_id, session)
 
 
 @router.post("/{conversation_id}/message/stream")
@@ -216,89 +71,21 @@ async def send_message_stream(
     session: AsyncSession = Depends(get_session),
 ):
     """Send message to conversation and stream response token-by-token (SSE)"""
-
-    if not request.message.strip():
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "empty_message",
-                "message": "Message cannot be empty",
-            },
-        )
-
-    result = await session.execute(
-        select(Conversations).where(
-            (Conversations.id == conversation_id)
-            & (Conversations.company_id == company_id)
-            & (Conversations.tenant_id == tenant_id)
-        )
+    chunks, sources, history = await prepare_message_stream_service(
+        conversation_id, request.message, company_id, tenant_id, session
     )
-    conversation = result.scalar_one_or_none()
-
-    if not conversation:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "conversation_not_found",
-                "message": "Conversation not found or does not belong to this tenant",
-            },
-        )
-
-    try:
-        chunks = await retrieve_chunks(
-            query=request.message,
-            company_id=company_id,
-            tenant_id=tenant_id,
-            session=session,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "retrieval_error",
-                "message": f"Failed to retrieve context: {str(e)}",
-            },
-        )
-
-    if not chunks:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "no_context",
-                "message": "No relevant documents found in knowledge base",
-            },
-        )
-
-    history_result = await session.execute(
-        select(Messages)
-        .where(Messages.conversation_id == conversation_id)
-        .order_by(Messages.created_at.asc())
-    )
-    history = [
-        {"role": msg.role, "content": msg.content}
-        for msg in history_result.scalars().all()
-    ]
-
-    sources = [
-        {"document_id": str(chunk["document_id"]), "chunk_index": chunk["chunk_index"]}
-        for chunk in chunks
-    ]
 
     user_message_text = request.message
 
     async def event_generator():
         full_text = ""
         try:
-            async for text in stream_chat(user_message_text, chunks, history=history):
+            async for text in stream_message_service(user_message_text, chunks, history):
                 full_text += text
                 yield sse_event({"text": text})
 
             # Save both messages only after successful stream completion
-            session.add_all([
-                Messages(conversation_id=conversation_id, role="user", content=user_message_text),
-                Messages(conversation_id=conversation_id, role="assistant", content=full_text),
-            ])
-            await session.commit()
+            await save_stream_result_service(conversation_id, user_message_text, full_text, session)
 
             yield sse_event(
                 {"sources": sources, "conversation_id": str(conversation_id)},

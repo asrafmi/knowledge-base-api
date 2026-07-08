@@ -1,13 +1,18 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.dependencies import get_company_id
 from src.db.session import get_session
-from src.models.database import Company, Tenant
 from src.models.schemas import TenantCreate, TenantResponse, TenantUpdate
+from src.services.tenants import (
+    create_tenant_service,
+    delete_tenant_service,
+    get_all_tenants_service,
+    get_tenant_service,
+    update_tenant_service,
+)
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -18,18 +23,8 @@ async def create_tenant(
     company_id: UUID = Depends(get_company_id),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(select(Company).where(Company.id == company_id))
-    company = result.scalar_one_or_none()
-    if not company:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "company_not_found", "message": "Company tidak ditemukan"},
-        )
+    db_tenant = await create_tenant_service(company_id, tenant.name, session)
 
-    db_tenant = Tenant(company_id=company_id, name=tenant.name)
-    session.add(db_tenant)
-    await session.commit()
-    await session.refresh(db_tenant)
     return db_tenant
 
 
@@ -38,10 +33,8 @@ async def list_tenants(
     company_id: UUID = Depends(get_company_id),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Tenant).where(Tenant.company_id == company_id)
-    )
-    tenants = result.scalars().all()
+    tenants = await get_all_tenants_service(company_id, session)
+
     return tenants
 
 
@@ -51,20 +44,8 @@ async def get_tenant(
     company_id: UUID = Depends(get_company_id),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Tenant).where(
-            (Tenant.id == tenant_id) & (Tenant.company_id == company_id)
-        )
-    )
-    tenant = result.scalar_one_or_none()
-    if not tenant:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "tenant_not_found",
-                "message": "Tenant ID tidak ditemukan atau tidak milik company ini",
-            },
-        )
+    tenant = await get_tenant_service(tenant_id, company_id, session)
+
     return tenant
 
 
@@ -75,23 +56,8 @@ async def update_tenant(
     company_id: UUID = Depends(get_company_id),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Tenant).where(
-            (Tenant.id == tenant_id) & (Tenant.company_id == company_id)
-        )
-    )
-    db_tenant = result.scalar_one_or_none()
-    if not db_tenant:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "tenant_not_found",
-                "message": "Tenant ID tidak ditemukan atau tidak milik company ini",
-            },
-        )
-    db_tenant.name = tenant.name
-    await session.commit()
-    await session.refresh(db_tenant)
+    db_tenant = await update_tenant_service(tenant_id, company_id, tenant.name, session)
+
     return db_tenant
 
 
@@ -101,20 +67,6 @@ async def delete_tenant(
     company_id: UUID = Depends(get_company_id),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(
-        select(Tenant).where(
-            (Tenant.id == tenant_id) & (Tenant.company_id == company_id)
-        )
-    )
-    db_tenant = result.scalar_one_or_none()
-    if not db_tenant:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "tenant_not_found",
-                "message": "Tenant ID tidak ditemukan atau tidak milik company ini",
-            },
-        )
-    await session.delete(db_tenant)
-    await session.commit()
+    await delete_tenant_service(tenant_id, company_id, session)
+
     return {"status": "success"}

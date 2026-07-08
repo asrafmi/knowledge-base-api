@@ -1,13 +1,17 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_session
-from src.models.database import Company
 from src.models.schemas import CompanyCreate, CompanyResponse, CompanyUpdate
-from src.services.companies import get_all_companies_service
+from src.services.companies import (
+    create_company_service,
+    delete_company_service,
+    get_all_companies_service,
+    get_company_service,
+    update_company_service,
+)
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -17,11 +21,9 @@ async def create_company(
     company: CompanyCreate,
     session: AsyncSession = Depends(get_session),
 ):
-    db_company = Company(name=company.name)
-    session.add(db_company)
-    await session.commit()
-    await session.refresh(db_company)
-    return db_company
+    company = await create_company_service(session, company.name)
+
+    return company
 
 
 @router.get("", response_model=list[CompanyResponse])
@@ -38,13 +40,8 @@ async def get_company(
     company_id: UUID,
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(select(Company).where(Company.id == company_id))
-    company = result.scalar_one_or_none()
-    if not company:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "company_not_found", "message": "Company tidak ditemukan"},
-        )
+    company = await get_company_service(company_id, session)
+
     return company
 
 
@@ -54,17 +51,9 @@ async def update_company(
     company: CompanyUpdate,
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(select(Company).where(Company.id == company_id))
-    db_company = result.scalar_one_or_none()
-    if not db_company:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "company_not_found", "message": "Company tidak ditemukan"},
-        )
-    db_company.name = company.name
-    await session.commit()
-    await session.refresh(db_company)
-    return db_company
+    updated_company = await update_company_service(company_id, company.name, session)
+
+    return updated_company
 
 
 @router.delete("/{company_id}")
@@ -72,13 +61,6 @@ async def delete_company(
     company_id: UUID,
     session: AsyncSession = Depends(get_session),
 ):
-    result = await session.execute(select(Company).where(Company.id == company_id))
-    db_company = result.scalar_one_or_none()
-    if not db_company:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "company_not_found", "message": "Company tidak ditemukan"},
-        )
-    await session.delete(db_company)
-    await session.commit()
+    await delete_company_service(company_id, session)
+
     return {"status": "success"}

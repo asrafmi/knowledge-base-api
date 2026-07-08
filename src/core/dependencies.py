@@ -1,11 +1,10 @@
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_session
-from src.models.database import Tenant
+from src.repository.tenants import get_by_id_repo
 
 
 async def get_company_id(x_company_id: UUID = Header(...)) -> UUID:
@@ -22,12 +21,7 @@ async def validate_tenant(
     session: AsyncSession = Depends(get_session),
 ) -> UUID:
     """Validate that tenant_id belongs to company_id"""
-    result = await session.execute(
-        select(Tenant).where(
-            (Tenant.id == tenant_id) & (Tenant.company_id == company_id)
-        )
-    )
-    tenant = result.scalar_one_or_none()
+    tenant = await get_by_id_repo(tenant_id, company_id, session)
     if not tenant:
         raise HTTPException(
             status_code=404,
