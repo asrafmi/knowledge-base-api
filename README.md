@@ -134,6 +134,10 @@ uvicorn main:app --reload --port 8000
   - **Headers:** `X-Company-ID`, `X-Tenant-ID`
   - **Body:** `{"query": "..."}`
   - **Response:** answer + source chunks
+- `POST /v1/completion/stream` — Query knowledge base, stream answer token-by-token (SSE)
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Body:** `{"query": "..."}`
+  - **Response:** `text/event-stream` — event `text` per token, event `done` berisi sources, event `error` jika gagal
 
 ### Chat — Multi-Turn Conversation
 - `POST /v1/chat` — Create conversation
@@ -144,9 +148,18 @@ uvicorn main:app --reload --port 8000
   - **Headers:** `X-Company-ID`, `X-Tenant-ID`
   - **Body:** `{"message": "..."}`
   - **Response:** answer + source chunks
+- `POST /v1/chat/{conversation_id}/message/stream` — Send message, stream answer token-by-token (SSE)
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Body:** `{"message": "..."}`
+  - **Response:** `text/event-stream` — event `text` per token, event `done` berisi sources + conversation_id, event `error` jika gagal. Pesan disimpan ke DB hanya setelah stream selesai sukses.
 - `GET /v1/chat/{conversation_id}/history` — Get conversation history
   - **Headers:** `X-Company-ID`, `X-Tenant-ID`
   - **Response:** list of all messages (user + assistant)
+
+### Conversation — List
+- `GET /v1/conversation` — List semua conversation milik tenant
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Response:** list of conversation_id + created_at
 
 **Multi-tenant Headers (Required for knowledge base endpoints):**
 ```
@@ -156,38 +169,62 @@ X-Tenant-ID: <uuid>
 
 ## Project Structure
 
+Kode aplikasi berada di `src/`, mengikuti 3 layer ala NestJS: **controller → service → repository**.
+
+- **Controller** — terima request, resolve dependency FastAPI (`Depends`), oper ke service sebagai argumen biasa
+- **Service** — business logic, orkestrasi antar repository/service lain, tidak pernah akses DB langsung
+- **Repository** — satu file per tabel, satu-satunya tempat yang boleh menjalankan query (`session.execute`, dll)
+
 ```
 knowledge-base-api/
-├── main.py                 # FastAPI app entry point
-├── requirements.txt        # Python dependencies
-├── .env                    # Environment variables (gitignored)
-├── .env.example           # Environment template
-├── alembic/               # Database migrations
-│   ├── env.py             # Alembic configuration
-│   ├── versions/          # Migration files
-│   └── script.py.mako     # Migration template
-├── core/
-│   ├── config.py          # Settings & environment variables
-│   └── dependencies.py    # FastAPI dependencies & validation
-├── db/
-│   └── session.py         # AsyncSession & engine setup
-├── models/
-│   ├── database.py        # SQLAlchemy ORM models
-│   └── schemas.py         # Pydantic request/response schemas
-├── api/
-│   └── v1/
-│       ├── router.py      # Main API router
-│       ├── companies.py   # Company endpoints
-│       └── tenants.py     # Tenant endpoints
-├── services/
-│   ├── ingestion.py       # Document parsing & chunking
-│   ├── retrieval.py       # Vector similarity search (pgvector)
-│   └── llm.py             # Claude integration & RAG context
-├── infrastructure/
-│   └── voyage/
-│       └── index.py       # Voyage AI embedding client
+├── main.py                                  # FastAPI app entry point
+├── alembic.ini                              # Alembic config (root, path ke src/alembic)
+├── requirements.txt                          # Python dependencies
+├── .env                                      # Environment variables (gitignored)
+├── .env.example                              # Environment template
+├── src/
+│   ├── controller/v1/
+│   │   ├── router.py                       # Main API router aggregator
+│   │   ├── companies.py                    # Company endpoints
+│   │   ├── tenants.py                      # Tenant endpoints
+│   │   ├── knowledge.py                    # Document ingestion endpoints
+│   │   ├── completion.py                   # One-shot RAG + streaming endpoint
+│   │   ├── chat.py                         # Multi-turn chat endpoints (+ streaming)
+│   │   └── conversation.py                 # List conversations per tenant
+│   ├── services/
+│   │   ├── companies.py                    # Company business logic
+│   │   ├── tenants.py                      # Tenant business logic
+│   │   ├── knowledge.py                    # Ingestion pipeline orchestration
+│   │   ├── chat.py                         # Chat & conversation business logic
+│   │   ├── ingestion.py                    # Document parsing & chunking
+│   │   ├── retrieval.py                    # Vector similarity search (delegasi ke repository)
+│   │   └── llm.py                          # Claude integration & RAG context
+│   ├── repository/
+│   │   ├── companies.py                    # Query tabel companies
+│   │   ├── tenants.py                      # Query tabel tenants
+│   │   ├── documents.py                    # Query tabel documents
+│   │   ├── document_chunks.py              # Query tabel document_chunks + similarity search
+│   │   ├── conversations.py                # Query tabel conversations
+│   │   └── messages.py                     # Query tabel messages
+│   ├── core/
+│   │   ├── config.py                       # Settings & environment variables
+│   │   ├── dependencies.py                 # FastAPI dependencies & validation
+│   │   └── sse.py                          # SSE event formatting helper
+│   ├── db/
+│   │   └── session.py                      # AsyncSession & engine setup
+│   ├── models/
+│   │   ├── database.py                     # SQLAlchemy ORM models
+│   │   └── schemas.py                      # Pydantic request/response schemas
+│   ├── infrastructure/
+│   │   └── voyage/
+│   │       └── index.py                    # Voyage AI embedding client
+│   └── alembic/                            # Database migrations
+│       ├── env.py                          # Alembic configuration
+│       ├── versions/                       # Migration files
+│       └── script.py.mako                  # Migration template
+├── docs/                                    # Catatan implementasi per phase
 └── misc/docker/
-    └── docker-compose.yml # PostgreSQL container
+    └── docker-compose.yml                  # PostgreSQL container
 ```
 
 ## Database Schema
@@ -261,7 +298,7 @@ X-Company-ID: <uuid>   # Company yang mengakses
 X-Tenant-ID: <uuid>    # Tenant dalam company tersebut (untuk validation)
 ```
 
-Validasi dilakukan di `core/dependencies.py`:
+Validasi dilakukan di `src/core/dependencies.py` (query tenant lookup-nya sendiri ada di `src/repository/tenants.py`):
 - Memastikan `X-Company-ID` valid dan ada di database
 - Memastikan `X-Tenant-ID` memang milik `X-Company-ID` (query ke tabel tenants)
 
@@ -310,15 +347,18 @@ ruff check . --fix
 
 ## Next Steps
 
-- [ ] Document ingestion (`POST /v1/knowledge/ingest`)
-- [ ] Document listing (`GET /v1/knowledge/documents`)
-- [ ] Document deletion (`DELETE /v1/knowledge/documents/{id}`)
-- [ ] One-shot completion (`POST /v1/completion`)
-- [ ] Multi-turn chat (`POST /v1/chat`)
-- [ ] Chat history retrieval (`GET /v1/chat/{id}/history`)
-- [ ] pgvector extension setup & indexing
+- [x] Document ingestion (`POST /v1/knowledge/ingest`)
+- [x] Document listing (`GET /v1/knowledge/documents`)
+- [x] Document deletion (`DELETE /v1/knowledge/documents/{id}`)
+- [x] One-shot completion (`POST /v1/completion`)
+- [x] Multi-turn chat (`POST /v1/chat`)
+- [x] Chat history retrieval (`GET /v1/chat/{id}/history`)
+- [x] pgvector extension setup & indexing
+- [x] SSE streaming untuk completion & chat
+- [x] Conversation listing (`GET /v1/conversation`)
+- [x] Layered architecture refactor (controller → service → repository)
 - [ ] Unit & integration tests
-- [ ] API documentation
+- [ ] API documentation expansion (OpenAPI/Swagger detail)
 - [ ] Production deployment guide
 
 ## License

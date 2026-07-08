@@ -50,17 +50,30 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 - ✅ Retrieval service (services/retrieval.py): pgvector cosine_distance search
 - ✅ LLM service (services/llm.py): Claude integration, context building, RAG system prompt
 - ✅ Pydantic schemas: CompletionRequest/Response, ChatCreate/Message/History schemas, SourceChunk
-- ✅ Completion endpoint (api/v1/completion.py): POST `/v1/completion` one-shot RAG query
-- ✅ Chat endpoints (api/v1/chat.py):
+- ✅ Completion endpoint: POST `/v1/completion` one-shot RAG query
+- ✅ Chat endpoints:
   - POST `/v1/chat` — create conversation
   - POST `/v1/chat/{id}/message` — multi-turn chat dengan full history
   - GET `/v1/chat/{id}/history` — fetch conversation history
-- ✅ Router registration di api/v1/router.py
+- ✅ Router registration
+
+**Phase 3: Streaming & Conversation List** ✅
+- ✅ SSE helper (core/sse.py): format Server-Sent Events
+- ✅ Streaming completion: POST `/v1/completion/stream` — token-by-token via SSE
+- ✅ Streaming chat: POST `/v1/chat/{id}/message/stream` — token-by-token via SSE, save message setelah stream selesai
+- ✅ Conversation listing: GET `/v1/conversation` — list semua conversation per tenant
+
+**Phase 4: Layered Architecture Refactor (2026-07-08)** ✅
+- ✅ Restrukturisasi seluruh source code ke dalam `src/` dengan 3 layer: **controller → service → repository** (pola ala NestJS)
+- ✅ Repository per entity/tabel: `companies`, `tenants`, `documents`, `document_chunks`, `conversations`, `messages` — semua akses DB (`session.execute/add/delete`) hanya boleh ada di layer ini
+- ✅ Service layer murni business logic, orkestrasi antar repository, tidak pernah akses DB langsung
+- ✅ Controller hanya menerima `Depends` dari FastAPI dan meneruskan `session` sebagai parameter biasa ke service — root cause bug lama: `Depends()` FastAPI hanya di-resolve pada fungsi yang dipanggil FastAPI sendiri (route handler & dependency chain), bukan pada pemanggilan manual antar layer
+- ✅ Fixed bug: `Documents(metadata=...)` seharusnya `meta=...` (kolom SQLAlchemy bernama `meta`, bukan `metadata`)
 
 ### 🔄 Next Phase
 
-**Phase 3: Testing & Docs** (P2)
-- Unit tests untuk services (retrieval, llm, ingestion)
+**Phase 5: Testing & Docs** (P2)
+- Unit tests untuk services (retrieval, llm, ingestion) & repository layer
 - Integration tests untuk endpoints
 - API documentation expansion (OpenAPI/Swagger)
 - Deployment guide & production checklist
@@ -88,42 +101,68 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 
 ## Project Structure
 
+Seluruh source code ada di `src/`, dipisah 3 layer ala NestJS: **controller → service → repository**.
+
+- **Controller** (`src/controller/v1/`): terima request, resolve `Depends` (session, header validation), lalu oper ke service sebagai argumen biasa. Tidak ada query DB langsung di sini.
+- **Service** (`src/services/`): business logic, orkestrasi antar repository (dan antar service lain, misal `chat.py` memanggil `retrieval.py` & `llm.py`). Tidak pernah panggil `session.execute/add/delete` langsung.
+- **Repository** (`src/repository/`): satu file per entity/tabel. Semua akses DB wajib ada di sini saja.
+
+**Kenapa dipisah begini:** `Depends()` FastAPI hanya di-resolve pada fungsi yang dipanggil FastAPI sendiri (route handler & dependency chain-nya lewat `Depends`). Kalau dipanggil manual sebagai plain function call antar layer (service memanggil repository, dst), `Depends(get_session)` tidak pernah ter-resolve — parameter `session` akan terisi objek `Depends` mentah, bukan `AsyncSession`, dan akan error `AttributeError` saat dipakai untuk query. Solusinya: `Depends` cuma boleh dipakai di controller (dan `core/dependencies.py`, karena itu FastAPI dependency chain juga). Service dan repository menerima `session` sebagai parameter wajib biasa tanpa default `Depends`.
+
 ```
 .
 ├── main.py                                  # FastAPI app entry point
-├── core/
-│   ├── config.py                           # Pydantic settings & env vars
-│   └── dependencies.py                     # FastAPI dependency injection
-├── api/v1/
-│   ├── router.py                           # Main router aggregator
-│   ├── knowledge.py                        # Ingestion endpoints (3 routes) ✅
-│   ├── completion.py                       # One-shot RAG endpoint ✅
-│   └── chat.py                             # Multi-turn chat endpoints (3 routes) ✅
-├── services/
-│   ├── ingestion.py                        # File parsing & chunking ✅
-│   ├── retrieval.py                        # Vector similarity search ✅
-│   └── llm.py                              # Claude integration ✅
-├── infrastructure/
-│   └── voyage/
-│       └── index.py                        # Voyage AI embedding client
-├── models/
-│   ├── database.py                         # SQLAlchemy ORM models
-│   └── schemas.py                          # Pydantic request/response schemas
-├── db/
-│   └── session.py                          # AsyncSession factory
-├── alembic/                                # Database migrations
-│   ├── versions/
-│   │   ├── 001_initial_schema.py          # Companies & tenants ✅
-│   │   ├── 002_documents_schema.py        # Documents & chunks ✅
-│   │   └── 003_add_conversations.py       # Conversations & messages ✅
-│   └── env.py                              # Migration environment config
+├── alembic.ini                              # Alembic config (root, path ke src/alembic)
+├── src/
+│   ├── controller/v1/
+│   │   ├── router.py                       # Main router aggregator
+│   │   ├── companies.py                    # Company endpoints ✅
+│   │   ├── tenants.py                      # Tenant endpoints ✅
+│   │   ├── knowledge.py                    # Ingestion endpoints (3 routes) ✅
+│   │   ├── completion.py                   # One-shot RAG + streaming endpoint ✅
+│   │   ├── chat.py                         # Multi-turn chat endpoints (4 routes, termasuk stream) ✅
+│   │   └── conversation.py                 # List conversations per tenant ✅
+│   ├── services/
+│   │   ├── companies.py                    # Company business logic ✅
+│   │   ├── tenants.py                      # Tenant business logic ✅
+│   │   ├── knowledge.py                    # Ingestion pipeline orchestration ✅
+│   │   ├── chat.py                         # Chat & conversation business logic ✅
+│   │   ├── ingestion.py                    # File parsing & chunking ✅
+│   │   ├── retrieval.py                    # Vector similarity search (delegasi ke repository) ✅
+│   │   └── llm.py                          # Claude integration, tidak ada akses DB ✅
+│   ├── repository/
+│   │   ├── companies.py                    # Query tabel companies ✅
+│   │   ├── tenants.py                      # Query tabel tenants ✅
+│   │   ├── documents.py                    # Query tabel documents ✅
+│   │   ├── document_chunks.py              # Query tabel document_chunks + similarity search ✅
+│   │   ├── conversations.py                # Query tabel conversations ✅
+│   │   └── messages.py                     # Query tabel messages ✅
+│   ├── core/
+│   │   ├── config.py                       # Pydantic settings & env vars
+│   │   ├── dependencies.py                 # FastAPI dependency injection (header + tenant validation)
+│   │   └── sse.py                          # SSE event formatting helper
+│   ├── infrastructure/
+│   │   └── voyage/
+│   │       └── index.py                    # Voyage AI embedding client
+│   ├── models/
+│   │   ├── database.py                     # SQLAlchemy ORM models
+│   │   └── schemas.py                      # Pydantic request/response schemas
+│   ├── db/
+│   │   └── session.py                      # AsyncSession factory
+│   └── alembic/                            # Database migrations
+│       ├── versions/
+│       │   ├── 001_initial_schema.py      # Companies & tenants ✅
+│       │   ├── 002_documents_schema.py    # Documents & chunks ✅
+│       │   └── 003_add_conversations.py   # Conversations & messages ✅
+│       └── env.py                          # Migration environment config
 ├── misc/docker/
 │   ├── docker-compose.yml                 # 3 services: postgres, migrator, app
 │   └── Dockerfile                          # Multi-stage Python build
-├── .env                                    # Environment variables (local)
-├── .env.example                            # Environment template
+├── docs/                                    # Catatan implementasi per phase
+├── .env                                     # Environment variables (local)
+├── .env.example                              # Environment template
 ├── requirements.txt                        # Python dependencies
-└── README.md                               # Setup & API documentation
+└── README.md                                # Setup & API documentation
 ```
 
 ---
@@ -430,15 +469,16 @@ HTTP status codes:
 
 **Database & ORM**
 - Semua database operation harus async (gunakan `AsyncSession` dari SQLAlchemy)
-- Column metadata: gunakan `meta` bukan `metadata` (reserved keyword di SQLAlchemy)
+- Column metadata: gunakan `meta` bukan `metadata` (reserved keyword di SQLAlchemy) — jangan konstruksi model dengan kwarg `metadata=`, wajib `meta=`
 - Vector dimension: 1024 untuk `voyage-4`. Update schema jika ganti embedding model
 - Relationships: gunakan `cascade="all, delete-orphan"` untuk Documents → DocumentChunks
 - Migration: Alembic auto-detects SQLAlchemy models, handle async URL conversion (remove `+asyncpg` untuk migration)
+- **Layering**: semua `session.execute/add/delete/add_all` wajib ada di `src/repository/<entity>.py`. Service dan controller tidak boleh query DB langsung — lihat penjelasan `Depends()` di section Project Structure
 
 **Embedding & Retrieval**
 - Voyage AI client: gunakan `@lru_cache` singleton pattern untuk reuse connection
 - Input type: gunakan `"query"` untuk user queries, `"document"` untuk chunks saat ingestion
-- Vector search: HNSW index pada kolom `embedding` dengan `vector_cosine_ops` + `cosine_distance()` dalam query
+- Vector search: HNSW index pada kolom `embedding` dengan `vector_cosine_ops` + `cosine_distance()` dalam query, query aktualnya ada di `src/repository/document_chunks.py::search_by_similarity_repo`
 - Multi-tenant filter: semua queries harus include `company_id` AND `tenant_id` filter
 - embeddings return type: `list[list[float]]` untuk chunks, `list[float]` untuk single query
 - **Async/Sync Bridging**: Voyage AI client synchronous → gunakan `asyncio.to_thread(embed_query, query)` di async context untuk prevent event loop blocking
@@ -448,20 +488,23 @@ HTTP status codes:
 - Error handling: catch exceptions per file type, don't let one corrupt file crash request
 - Temp files: save to `/tmp` via `save_upload_file()`, cleanup setelah selesai di finally block
 - Chunking: fixed-size 512 token per chunk, 50 token overlap, gunakan tiktoken `cl100k_base`
+- Pipeline orchestration (validasi file, parse, chunk, embed, simpan) ada di `src/services/knowledge.py`, dipanggil dari `src/controller/v1/knowledge.py`
 
 **API & Dependencies**
 - Headers: `X-Company-ID` dan `X-Tenant-ID` mandatory di semua knowledge endpoints
-- Validation: `get_company_id()` extracts header, `validate_tenant()` checks ownership
+- Validation: `get_company_id()` extracts header, `validate_tenant()` checks ownership (query tenant lookup didelegasikan ke `src/repository/tenants.py`)
 - Error format: return `{"error": "code", "message": "detail"}` untuk consistency
-- Router aggregation: register knowledge router di `api/v1/router.py`
+- Router aggregation: register semua router di `src/controller/v1/router.py`
 
-**RAG & Chat (Phase 2)**
-- Retrieval: `retrieve_chunks()` di services/retrieval.py, returns list of dicts dengan `document_id`, `chunk_index`, `chunk_text`, `meta`
-- Context building: `build_context()` di services/llm.py, concatenates chunks dengan source formatting
-- One-shot: `query_completion()` untuk single query tanpa history
-- Multi-turn: `query_chat()` untuk conversations dengan history context (messages array passed to Claude)
+**RAG & Chat**
+- Retrieval: `retrieve_chunks()` di `src/services/retrieval.py`, returns list of dicts dengan `document_id`, `chunk_index`, `chunk_text`, `meta` — query similarity search-nya sendiri ada di `src/repository/document_chunks.py`
+- Context building: `build_context()` di `src/services/llm.py`, concatenates chunks dengan source formatting
+- One-shot: `query_completion()` / `stream_completion()` untuk single query tanpa history
+- Multi-turn: `query_chat()` / `stream_chat()` untuk conversations dengan history context (messages array passed to Claude)
 - System prompt: RAG template di SYSTEM_PROMPT constant, consistent across completion & chat
-- Chat history: loaded from messages table, ordered by `created_at`, passed to Claude messages array
+- Chat & conversation business logic (create, send message, get history, list conversations, streaming) ada di `src/services/chat.py`
+- Chat history: loaded via `src/repository/messages.py`, ordered by `created_at`, passed to Claude messages array
+- SSE streaming: format event pakai `sse_event()` di `src/core/sse.py`, dipakai di endpoint `/v1/completion/stream` dan `/v1/chat/{id}/message/stream`
 
 **Docker Deployment**
 - 3 services: postgres (pgvector/pgvector:pg16), migrator (runs alembic), app (uvicorn)
