@@ -2,175 +2,52 @@ import asyncio
 from typing import AsyncIterator
 
 from anthropic import Anthropic
-from src.core.config import settings
 
-SYSTEM_PROMPT = """Kamu adalah asistennya Asraf, asisten yang menjawab pertanyaan berdasarkan dokumen yang tersedia.
-
-Aturan:
-- Kalo ditanya kamu siapa, jawab "Saya adalah Acho, asisten Asraf yang siap melakukan apapun yang diperintahkan Asraf."
-- Jawab hanya berdasarkan konteks yang diberikan
-- Jika informasi tidak ada dalam konteks, katakan dengan jelas bahwa Asraf melarangkan informasi tersebut, dan jangan mengarang jawaban
-- Jangan mengarang jawaban
-- Jawab dalam bahasa yang sama dengan pertanyaan pengguna, jika bahasa inggris, jawab dalam bahasa inggris, jika bahasa indonesia, jawab dalam bahasa indonesia
-- Jangan bilang "berdasarkan dokumen ..." atau "berdasarkan konteks ..." atau "dalam dokumen ..." atau sejenisnya
-- Selalu akhiri dengan question untuk memantik pertanyaan lanjutan dari pengguna
-- Selalu bersikap sopan dan ramah"""
+from src.infrastructure.llm.base import LLMProvider
 
 
-def get_anthropic_client():
-    return Anthropic(api_key=settings.anthropic_api_key)
+class AnthropicProvider(LLMProvider):
+    def __init__(self, api_key: str):
+        self._client = Anthropic(api_key=api_key)
 
+    def query(self, system_prompt: str, messages: list[dict], model: str) -> str:
+        response = self._client.messages.create(
+            model=model,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=messages,
+        )
+        return response.content[0].text
 
-def build_context(chunks: list[dict]) -> str:
-    """Build context string from retrieved chunks"""
-    context_parts = []
-    for i, chunk in enumerate(chunks, 1):
-        filename = chunk.get("meta", {}).get("filename", "unknown")
-        context_parts.append(f"[Sumber {i} — {filename}]\n{chunk['chunk_text']}")
-    return "\n\n".join(context_parts)
+    async def stream(self, system_prompt: str, messages: list[dict], model: str) -> AsyncIterator[str]:
+        """
+        Stream Claude's answer token-by-token.
+        Uses a queue to bridge the sync Anthropic stream into async iteration.
+        """
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
+        def _run_stream():
+            try:
+                with self._client.messages.stream(
+                    model=model,
+                    max_tokens=1024,
+                    system=system_prompt,
+                    messages=messages,
+                ) as stream:
+                    for text in stream.text_stream:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, e)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
 
-def query_completion(query: str, chunks: list[dict]) -> str:
-    """
-    Send query + context to Claude, return answer.
-    One-shot completion without conversation history.
-    """
-    client = get_anthropic_client()
-    context = build_context(chunks)
+        loop.run_in_executor(None, _run_stream)
 
-    user_message = f"""Konteks:
-{context}
-
-Pertanyaan: {query}"""
-
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-    return response.content[0].text
-
-
-def query_chat(
-    query: str,
-    chunks: list[dict],
-    history: list[dict] | None = None,
-) -> str:
-    """
-    Send query + context + history to Claude for multi-turn chat.
-    history format: [{"role": "user"/"assistant", "content": "..."}, ...]
-    """
-    client = get_anthropic_client()
-    context = build_context(chunks)
-
-    current_user_message = f"""Konteks (untuk menjawab pertanyaan terbaru):
-{context}
-
-Pertanyaan: {query}"""
-
-    messages = (history or []) + [
-        {"role": "user", "content": current_user_message}
-    ]
-
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=messages,
-    )
-
-    return response.content[0].text
-
-
-async def stream_completion(query: str, chunks: list[dict]) -> AsyncIterator[str]:
-    """
-    Stream Claude's answer token-by-token for one-shot completion.
-    Uses a queue to bridge the sync Anthropic stream into async iteration.
-    """
-    client = get_anthropic_client()
-    context = build_context(chunks)
-
-    user_message = f"""Konteks:
-{context}
-
-Pertanyaan: {query}"""
-
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def _run_stream():
-        try:
-            with client.messages.stream(
-                model="claude-haiku-4-5",
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
-            ) as stream:
-                for text in stream.text_stream:
-                    loop.call_soon_threadsafe(queue.put_nowait, text)
-        except Exception as e:
-            loop.call_soon_threadsafe(queue.put_nowait, e)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    loop.run_in_executor(None, _run_stream)
-
-    while True:
-        item = await queue.get()
-        if item is None:
-            break
-        if isinstance(item, Exception):
-            raise item
-        yield item
-
-
-async def stream_chat(
-    query: str,
-    chunks: list[dict],
-    history: list[dict] | None = None,
-) -> AsyncIterator[str]:
-    """
-    Stream Claude's answer token-by-token for multi-turn chat.
-    history format: [{"role": "user"/"assistant", "content": "..."}, ...]
-    """
-    client = get_anthropic_client()
-    context = build_context(chunks)
-
-    current_user_message = f"""Konteks (untuk menjawab pertanyaan terbaru):
-{context}
-
-Pertanyaan: {query}"""
-
-    messages = (history or []) + [
-        {"role": "user", "content": current_user_message}
-    ]
-
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def _run_stream():
-        try:
-            with client.messages.stream(
-                model="claude-haiku-4-5",
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-            ) as stream:
-                for text in stream.text_stream:
-                    loop.call_soon_threadsafe(queue.put_nowait, text)
-        except Exception as e:
-            loop.call_soon_threadsafe(queue.put_nowait, e)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    loop.run_in_executor(None, _run_stream)
-
-    while True:
-        item = await queue.get()
-        if item is None:
-            break
-        if isinstance(item, Exception):
-            raise item
-        yield item
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item

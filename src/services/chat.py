@@ -19,8 +19,9 @@ from src.repository.conversations import (
     get_by_id_repo,
 )
 from src.repository.messages import create_messages_repo, get_all_by_conversation_repo
-from src.infrastructure.llm.anthropic.index import query_chat, stream_chat
+from src.infrastructure.llm.base import build_context
 from src.services.retrieval import retrieve_chunks
+from src.services.tenant_llm_settings import resolve_llm_config_service
 
 
 async def create_conversation_service(
@@ -80,6 +81,16 @@ async def _retrieve_context_or_404(
     return chunks
 
 
+def _build_rag_messages(message: str, chunks: list[dict], history: list[dict]) -> list[dict]:
+    context = build_context(chunks)
+    current_user_message = f"""Konteks (untuk menjawab pertanyaan terbaru):
+{context}
+
+Pertanyaan: {message}"""
+
+    return history + [{"role": "user", "content": current_user_message}]
+
+
 async def send_message_service(
     conversation_id: UUID,
     message: str,
@@ -100,8 +111,11 @@ async def send_message_service(
     history_messages = await get_all_by_conversation_repo(conversation_id, session)
     history = [{"role": msg.role, "content": msg.content} for msg in history_messages]
 
+    provider, model, system_prompt = await resolve_llm_config_service(tenant_id, session)
+    rag_messages = _build_rag_messages(message, chunks, history)
+
     try:
-        answer = query_chat(message, chunks, history=history)
+        answer = provider.query(system_prompt, rag_messages, model)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -150,8 +164,8 @@ async def prepare_message_stream_service(
     company_id: UUID,
     tenant_id: UUID,
     session: AsyncSession,
-) -> tuple[list[dict], list[dict], list[dict]]:
-    """Validate + retrieve everything needed before streaming starts. Returns (chunks, sources, history)."""
+):
+    """Validate + retrieve everything needed before streaming starts. Returns (rag_messages, sources, provider, model, system_prompt)."""
     if not message.strip():
         raise HTTPException(
             status_code=400,
@@ -170,13 +184,16 @@ async def prepare_message_stream_service(
         for chunk in chunks
     ]
 
-    return chunks, sources, history
+    provider, model, system_prompt = await resolve_llm_config_service(tenant_id, session)
+    rag_messages = _build_rag_messages(message, chunks, history)
+
+    return rag_messages, sources, provider, model, system_prompt
 
 
 async def stream_message_service(
-    message: str, chunks: list[dict], history: list[dict]
+    rag_messages: list[dict], provider, model: str, system_prompt: str
 ) -> AsyncIterator[str]:
-    async for text in stream_chat(message, chunks, history=history):
+    async for text in provider.stream(system_prompt, rag_messages, model):
         yield text
 
 

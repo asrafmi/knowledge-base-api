@@ -27,6 +27,25 @@ class Tenant(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     company = relationship("Company", back_populates="tenants")
+    llm_settings = relationship(
+        "TenantLLMSettings", back_populates="tenant", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class TenantLLMSettings(Base):
+    __tablename__ = "tenant_llm_settings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, unique=True)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(20), nullable=False, default="anthropic")
+    model = Column(String(100), nullable=False, default="claude-haiku-4-5")
+    api_key_encrypted = Column(Text, nullable=True)
+    system_prompt = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    tenant = relationship("Tenant", back_populates="llm_settings")
 
 class Documents(Base):
     __tablename__ = "documents"

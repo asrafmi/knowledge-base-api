@@ -71,7 +71,7 @@ async def send_message_stream(
     session: AsyncSession = Depends(get_session),
 ):
     """Send message to conversation and stream response token-by-token (SSE)"""
-    chunks, sources, history = await prepare_message_stream_service(
+    rag_messages, sources, provider, model, system_prompt = await prepare_message_stream_service(
         conversation_id, request.message, company_id, tenant_id, session
     )
 
@@ -80,7 +80,7 @@ async def send_message_stream(
     async def event_generator():
         full_text = ""
         try:
-            async for text in stream_message_service(user_message_text, chunks, history):
+            async for text in stream_message_service(rag_messages, provider, model, system_prompt):
                 full_text += text
                 yield sse_event({"text": text})
 

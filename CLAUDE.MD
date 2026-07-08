@@ -48,7 +48,7 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 - ✅ Database migration (003_add_conversations.py): conversations & messages tables
 - ✅ ORM models: Conversations & Messages dengan relationships
 - ✅ Retrieval service (services/retrieval.py): pgvector cosine_distance search
-- ✅ LLM service (services/llm.py): Claude integration, context building, RAG system prompt
+- ✅ LLM integration (infrastructure/llm/anthropic/index.py): Claude integration, context building, RAG system prompt
 - ✅ Pydantic schemas: CompletionRequest/Response, ChatCreate/Message/History schemas, SourceChunk
 - ✅ Completion endpoint: POST `/v1/completion` one-shot RAG query
 - ✅ Chat endpoints:
@@ -70,9 +70,23 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 - ✅ Controller hanya menerima `Depends` dari FastAPI dan meneruskan `session` sebagai parameter biasa ke service — root cause bug lama: `Depends()` FastAPI hanya di-resolve pada fungsi yang dipanggil FastAPI sendiri (route handler & dependency chain), bukan pada pemanggilan manual antar layer
 - ✅ Fixed bug: `Documents(metadata=...)` seharusnya `meta=...` (kolom SQLAlchemy bernama `meta`, bukan `metadata`)
 
+**Phase 5: Per-Tenant LLM Provider Settings (2026-07-09)** ✅
+- ✅ Database migration (004_tenant_llm_settings.py): tabel `tenant_llm_settings`, 1:1 dengan tenant
+- ✅ ORM model `TenantLLMSettings` di `models/database.py`, relationship `uselist=False` dari `Tenant`
+- ✅ Enkripsi API key: `core/crypto.py` pakai Fernet symmetric encryption (`LLM_SETTINGS_ENCRYPTION_KEY` env var)
+- ✅ Provider abstraction di `infrastructure/llm/`:
+  - `base.py` — abstract `LLMProvider` (method `query()` & `stream()`), `DEFAULT_SYSTEM_PROMPT`, `RAG_GUARDRAIL_PROMPT` (selalu ditempel, tidak bisa dioverride tenant), `PROVIDER_MODELS` whitelist, `build_context()` (provider-agnostic)
+  - `factory.py` — `get_llm_provider(provider, api_key)`, fallback ke API key kita sendiri kalau tenant tidak provide
+  - `anthropic/index.py`, `openai/index.py`, `gemini/index.py` — masing-masing implement `LLMProvider`
+- ✅ Repository (`repository/tenant_llm_settings.py`) & service (`services/tenant_llm_settings.py`): `get_settings_service`, `update_settings_service` (validasi provider/model terhadap whitelist), `resolve_llm_config_service` (dipakai chat & completion sebelum manggil LLM)
+- ✅ Endpoint baru:
+  - `GET /v1/llm-settings` — lihat setting tenant (tidak pernah return API key mentah/terenkripsi)
+  - `PUT /v1/llm-settings` — set provider, model, API key (opsional), system prompt custom
+- ✅ `services/chat.py` & `controller/v1/completion.py` di-wire ulang: sebelum manggil LLM, resolve dulu provider/model/prompt tenant via `resolve_llm_config_service`, ketimbang hardcode Anthropic
+
 ### 🔄 Next Phase
 
-**Phase 5: Testing & Docs** (P2)
+**Phase 6: Testing & Docs** (P2)
 - Unit tests untuk services (retrieval, llm, ingestion) & repository layer
 - Integration tests untuk endpoints
 - API documentation expansion (OpenAPI/Swagger)
@@ -88,7 +102,8 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 | Database | PostgreSQL 16 + pgvector extension |
 | ORM | SQLAlchemy 2.0 (async) + asyncpg |
 | Embedding | Voyage AI API (`voyage-4`) |
-| LLM | Anthropic Claude (`claude-haiku-4-5`) |
+| LLM | Multi-provider per tenant: Anthropic Claude, OpenAI, Google Gemini (default: `claude-haiku-4-5`, fallback ke API key kita sendiri) |
+| Secrets | `cryptography` (Fernet) untuk enkripsi API key tenant di DB |
 | Doc parsing | `pypdf` (PDF), `python-docx` (DOCX), native (TXT) |
 | Chunking | Fixed-size, 512 token per chunk, 50 token overlap (tiktoken) |
 | Vector Search | pgvector with HNSW indexing (cosine similarity) |
@@ -121,29 +136,38 @@ Seluruh source code ada di `src/`, dipisah 3 layer ala NestJS: **controller → 
 │   │   ├── knowledge.py                    # Ingestion endpoints (3 routes) ✅
 │   │   ├── completion.py                   # One-shot RAG + streaming endpoint ✅
 │   │   ├── chat.py                         # Multi-turn chat endpoints (4 routes, termasuk stream) ✅
-│   │   └── conversation.py                 # List conversations per tenant ✅
+│   │   ├── conversation.py                 # List conversations per tenant ✅
+│   │   └── llm_settings.py                 # GET/PUT tenant LLM provider settings ✅
 │   ├── services/
 │   │   ├── companies.py                    # Company business logic ✅
 │   │   ├── tenants.py                      # Tenant business logic ✅
 │   │   ├── knowledge.py                    # Ingestion pipeline orchestration ✅
 │   │   ├── chat.py                         # Chat & conversation business logic ✅
+│   │   ├── tenant_llm_settings.py          # LLM settings CRUD + resolve_llm_config_service ✅
 │   │   ├── ingestion.py                    # File parsing & chunking ✅
-│   │   ├── retrieval.py                    # Vector similarity search (delegasi ke repository) ✅
-│   │   └── llm.py                          # Claude integration, tidak ada akses DB ✅
+│   │   └── retrieval.py                    # Vector similarity search (delegasi ke repository) ✅
 │   ├── repository/
 │   │   ├── companies.py                    # Query tabel companies ✅
 │   │   ├── tenants.py                      # Query tabel tenants ✅
 │   │   ├── documents.py                    # Query tabel documents ✅
 │   │   ├── document_chunks.py              # Query tabel document_chunks + similarity search ✅
 │   │   ├── conversations.py                # Query tabel conversations ✅
-│   │   └── messages.py                     # Query tabel messages ✅
+│   │   ├── messages.py                     # Query tabel messages ✅
+│   │   └── tenant_llm_settings.py          # Query tabel tenant_llm_settings ✅
 │   ├── core/
 │   │   ├── config.py                       # Pydantic settings & env vars
 │   │   ├── dependencies.py                 # FastAPI dependency injection (header + tenant validation)
+│   │   ├── crypto.py                       # Enkripsi/dekripsi API key tenant (Fernet) ✅
 │   │   └── sse.py                          # SSE event formatting helper
 │   ├── infrastructure/
-│   │   └── voyage/
-│   │       └── index.py                    # Voyage AI embedding client
+│   │   ├── voyage/
+│   │   │   └── index.py                    # Voyage AI embedding client
+│   │   └── llm/
+│   │       ├── base.py                     # LLMProvider ABC, guardrail prompt, model whitelist ✅
+│   │       ├── factory.py                  # get_llm_provider(provider, api_key) ✅
+│   │       ├── anthropic/index.py          # AnthropicProvider ✅
+│   │       ├── openai/index.py             # OpenAIProvider ✅
+│   │       └── gemini/index.py             # GeminiProvider ✅
 │   ├── models/
 │   │   ├── database.py                     # SQLAlchemy ORM models
 │   │   └── schemas.py                      # Pydantic request/response schemas
@@ -153,7 +177,8 @@ Seluruh source code ada di `src/`, dipisah 3 layer ala NestJS: **controller → 
 │       ├── versions/
 │       │   ├── 001_initial_schema.py      # Companies & tenants ✅
 │       │   ├── 002_documents_schema.py    # Documents & chunks ✅
-│       │   └── 003_add_conversations.py   # Conversations & messages ✅
+│       │   ├── 003_add_conversations.py   # Conversations & messages ✅
+│       │   └── 004_tenant_llm_settings.py # Tenant LLM provider settings ✅
 │       └── env.py                          # Migration environment config
 ├── misc/docker/
 │   ├── docker-compose.yml                 # 3 services: postgres, migrator, app
@@ -173,6 +198,9 @@ Seluruh source code ada di `src/`, dipisah 3 layer ala NestJS: **controller → 
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/dbname
 ANTHROPIC_API_KEY=sk-ant-...
 VOYAGE_API_KEY=pa-...
+OPENAI_API_KEY=sk-...          # opsional — fallback default kalau tenant tidak provide API key sendiri
+GEMINI_API_KEY=...             # opsional — fallback default kalau tenant tidak provide API key sendiri
+LLM_SETTINGS_ENCRYPTION_KEY=... # wajib — Fernet key, generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 CHUNK_SIZE=512
 CHUNK_OVERLAP=50
 RETRIEVAL_TOP_K=5
@@ -246,6 +274,19 @@ CREATE TABLE messages (
 );
 
 CREATE INDEX ON messages (conversation_id, created_at);
+
+-- 1:1 dengan tenant — provider/model/api_key/system_prompt custom per tenant
+CREATE TABLE tenant_llm_settings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL UNIQUE REFERENCES tenants(id) ON DELETE CASCADE,
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    provider VARCHAR(20) NOT NULL DEFAULT 'anthropic',
+    model VARCHAR(100) NOT NULL DEFAULT 'claude-haiku-4-5',
+    api_key_encrypted TEXT,   -- NULL = pakai API key kita sendiri (fallback)
+    system_prompt TEXT,      -- NULL = pakai DEFAULT_SYSTEM_PROMPT
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 ```
 
 ---
@@ -399,26 +440,77 @@ Ambil semua pesan dalam sebuah conversation.
 
 ---
 
-## RAG Prompt Template
+### LLM Settings — Per-Tenant Provider Configuration
 
-Gunakan template ini di `services/llm.py`:
+Tenant bisa memilih provider LLM (Anthropic/OpenAI/Gemini), model, API key sendiri (opsional), dan system prompt custom. Setting berlaku untuk semua endpoint RAG (`/v1/completion`, `/v1/chat/*`) dalam tenant itu — tidak ada override per-request.
+
+#### `GET /v1/llm-settings`
+
+Lihat setting LLM tenant saat ini. Kalau belum pernah di-set, return default (`anthropic` / `claude-haiku-4-5` / tanpa custom prompt).
+
+- **Headers:** `X-Company-ID`, `X-Tenant-ID`
+- **Response:**
+```json
+{
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5",
+  "has_custom_api_key": false,
+  "system_prompt": null,
+  "updated_at": null
+}
+```
+**Catatan:** API key (mentah maupun terenkripsi) **tidak pernah** dikembalikan di response — hanya flag boolean `has_custom_api_key`.
+
+#### `PUT /v1/llm-settings`
+
+Set atau update konfigurasi LLM tenant.
+
+- **Headers:** `X-Company-ID`, `X-Tenant-ID`
+- **Request:**
+```json
+{
+  "provider": "openai",
+  "model": "gpt-5.1",
+  "api_key": "sk-...",
+  "system_prompt": "Kamu adalah asisten HR yang ramah."
+}
+```
+- `api_key`: opsional. Kalau `null`/tidak diisi, fallback ke API key kita sendiri untuk provider tersebut.
+- `system_prompt`: opsional, custom persona/gaya bahasa. **RAG guardrail (jawab hanya dari konteks, jangan mengarang) selalu ditempel otomatis di belakang prompt custom ini** — tidak bisa dioverride tenant.
+- Validasi: `provider` harus salah satu dari `anthropic`/`openai`/`gemini`; `model` harus ada di whitelist provider tersebut (lihat `PROVIDER_MODELS` di `infrastructure/llm/base.py`) — 400 error kalau tidak valid.
+
+---
+
+## RAG Prompt & Multi-Provider LLM
+
+Sejak Phase 5, LLM tidak lagi hardcoded ke Anthropic. Semua provider (`infrastructure/llm/anthropic|openai|gemini/index.py`) implement interface `LLMProvider` di `infrastructure/llm/base.py`:
 
 ```python
-SYSTEM_PROMPT = """Kamu adalah asisten yang menjawab pertanyaan berdasarkan dokumen yang tersedia.
+class LLMProvider(ABC):
+    def query(self, system_prompt: str, messages: list[dict], model: str) -> str: ...
+    def stream(self, system_prompt: str, messages: list[dict], model: str) -> AsyncIterator[str]: ...
+```
 
-Aturan:
+`infrastructure/llm/base.py` juga jadi tempat konstanta bersama, dipakai semua provider:
+
+```python
+DEFAULT_SYSTEM_PROMPT = """Kamu adalah asisten yang menjawab pertanyaan berdasarkan dokumen yang tersedia.
+
+Jawab dalam bahasa yang sama dengan pertanyaan pengguna, jika bahasa inggris, jawab dalam bahasa inggris, jika bahasa indonesia, jawab dalam bahasa indonesia."""
+
+RAG_GUARDRAIL_PROMPT = """Aturan wajib (tidak bisa diubah):
 - Jawab hanya berdasarkan konteks yang diberikan
 - Jika informasi tidak ada dalam konteks, katakan dengan jelas bahwa kamu tidak menemukan informasi tersebut
-- Jangan mengarang jawaban
-- Jawab dalam bahasa yang sama dengan pertanyaan pengguna"""
+- Jangan mengarang jawaban"""
 
-def build_user_message(query: str, chunks: list[dict]) -> str:
-    context = "\n\n".join(
-        f"[Sumber {i+1} — {c['metadata'].get('filename', 'unknown')}]\n{c['chunk_text']}"
+def build_context(chunks: list[dict]) -> str:
+    return "\n\n".join(
+        f"[Sumber {i+1} — {c.get('meta', {}).get('filename', 'unknown')}]\n{c['chunk_text']}"
         for i, c in enumerate(chunks)
     )
-    return f"""Konteks:\n{context}\n\nPertanyaan: {query}"""
 ```
+
+Final system prompt yang dikirim ke LLM = `(tenant.system_prompt or DEFAULT_SYSTEM_PROMPT) + "\n\n" + RAG_GUARDRAIL_PROMPT` — dibangun di `services/tenant_llm_settings.py::resolve_llm_config_service()`. Setiap pemanggilan LLM di `services/chat.py` dan `controller/v1/completion.py` wajib resolve config ini dulu, baru panggil `provider.query()`/`provider.stream()` — jangan pernah import provider spesifik langsung.
 
 ---
 
@@ -498,13 +590,14 @@ HTTP status codes:
 
 **RAG & Chat**
 - Retrieval: `retrieve_chunks()` di `src/services/retrieval.py`, returns list of dicts dengan `document_id`, `chunk_index`, `chunk_text`, `meta` — query similarity search-nya sendiri ada di `src/repository/document_chunks.py`
-- Context building: `build_context()` di `src/services/llm.py`, concatenates chunks dengan source formatting
-- One-shot: `query_completion()` / `stream_completion()` untuk single query tanpa history
-- Multi-turn: `query_chat()` / `stream_chat()` untuk conversations dengan history context (messages array passed to Claude)
-- System prompt: RAG template di SYSTEM_PROMPT constant, consistent across completion & chat
+- Context building: `build_context()` di `src/infrastructure/llm/base.py`, provider-agnostic, concatenates chunks dengan source formatting
+- LLM calls: tidak ada lagi `query_completion()`/`query_chat()` global. Setiap tempat yang butuh jawaban LLM wajib panggil `resolve_llm_config_service(tenant_id, session)` dulu (dari `src/services/tenant_llm_settings.py`) untuk dapat `(provider_instance, model, system_prompt)`, baru panggil `provider.query(system_prompt, messages, model)` (one-shot) atau `provider.stream(...)` (SSE)
+- Provider resolution: `get_llm_provider(provider, api_key)` di `src/infrastructure/llm/factory.py` — `api_key=None` fallback ke API key kita sendiri (`settings.anthropic_api_key` / `openai_api_key` / `gemini_api_key`)
+- System prompt: `(tenant.system_prompt or DEFAULT_SYSTEM_PROMPT) + RAG_GUARDRAIL_PROMPT`, guardrail selalu ditempel tidak bisa dioverride tenant — lihat section "RAG Prompt & Multi-Provider LLM"
 - Chat & conversation business logic (create, send message, get history, list conversations, streaming) ada di `src/services/chat.py`
-- Chat history: loaded via `src/repository/messages.py`, ordered by `created_at`, passed to Claude messages array
+- Chat history: loaded via `src/repository/messages.py`, ordered by `created_at`, passed sebagai `messages` array ke provider (dinormalisasi `{"role", "content"}`, tiap provider adapt ke format SDK masing-masing)
 - SSE streaming: format event pakai `sse_event()` di `src/core/sse.py`, dipakai di endpoint `/v1/completion/stream` dan `/v1/chat/{id}/message/stream`
+- API key tenant disimpan terenkripsi (`api_key_encrypted` kolom, Fernet via `src/core/crypto.py`), didekripsi on-the-fly di `resolve_llm_config_service()` — **tidak pernah** dikembalikan mentah/terenkripsi lewat API response manapun
 
 **Docker Deployment**
 - 3 services: postgres (pgvector/pgvector:pg16), migrator (runs alembic), app (uvicorn)

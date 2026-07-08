@@ -6,9 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.dependencies import get_company_id, validate_tenant
 from src.core.sse import sse_event
 from src.db.session import get_session
+from src.infrastructure.llm.base import build_context
 from src.models.schemas import CompletionRequest, CompletionResponse, SourceChunk
 from src.services.retrieval import retrieve_chunks
-from src.infrastructure.llm.anthropic.index import query_completion, stream_completion
+from src.services.tenant_llm_settings import resolve_llm_config_service
+
+
+def _build_completion_message(query: str, chunks: list[dict]) -> list[dict]:
+    context = build_context(chunks)
+    user_message = f"""Konteks:
+{context}
+
+Pertanyaan: {query}"""
+    return [{"role": "user", "content": user_message}]
 
 router = APIRouter(prefix="/completion", tags=["completion"])
 
@@ -57,7 +67,9 @@ async def completion(
         )
 
     try:
-        answer = query_completion(request.query, chunks)
+        provider, model, system_prompt = await resolve_llm_config_service(tenant_id, session)
+        messages = _build_completion_message(request.query, chunks)
+        answer = provider.query(system_prompt, messages, model)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -123,9 +135,12 @@ async def completion_stream(
         for chunk in chunks
     ]
 
+    provider, model, system_prompt = await resolve_llm_config_service(tenant_id, session)
+    messages = _build_completion_message(request.query, chunks)
+
     async def event_generator():
         try:
-            async for text in stream_completion(request.query, chunks):
+            async for text in provider.stream(system_prompt, messages, model):
                 yield sse_event({"text": text})
             yield sse_event({"sources": sources}, event="done")
         except Exception as e:

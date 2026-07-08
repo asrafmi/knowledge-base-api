@@ -1,6 +1,6 @@
 # Knowledge Base API
 
-REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun dengan FastAPI + PostgreSQL (pgvector) + Claude (Anthropic) + Voyage AI untuk embedding.
+REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun dengan FastAPI + PostgreSQL (pgvector) + Voyage AI untuk embedding. LLM provider (Anthropic Claude, OpenAI, atau Google Gemini) dan model bisa dikonfigurasi per tenant.
 
 ## Quick Start
 
@@ -13,7 +13,9 @@ REST API untuk knowledge base dengan RAG pipeline dan multi-turn chat. Dibangun 
 1. **Setup Environment Variables**
 ```bash
 cp .env.example .env
-# Edit .env dengan API keys (ANTHROPIC_API_KEY, VOYAGE_API_KEY)
+# Edit .env dengan API keys (ANTHROPIC_API_KEY, VOYAGE_API_KEY, opsional OPENAI_API_KEY/GEMINI_API_KEY)
+# Generate LLM_SETTINGS_ENCRYPTION_KEY:
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 2. **Build & Start**
@@ -161,6 +163,17 @@ uvicorn main:app --reload --port 8000
   - **Headers:** `X-Company-ID`, `X-Tenant-ID`
   - **Response:** list of conversation_id + created_at
 
+### LLM Settings — Per-Tenant Provider Configuration
+Tenant bisa memilih provider LLM (`anthropic`/`openai`/`gemini`), model, API key sendiri (opsional — fallback ke API key kita kalau kosong), dan system prompt custom. Berlaku untuk semua endpoint RAG (`/v1/completion`, `/v1/chat/*`) dalam tenant tersebut.
+- `GET /v1/llm-settings` — Lihat setting saat ini
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Response:** `provider`, `model`, `has_custom_api_key` (boolean, API key tidak pernah dikembalikan), `system_prompt`, `updated_at`
+- `PUT /v1/llm-settings` — Set/update provider, model, API key, system prompt
+  - **Headers:** `X-Company-ID`, `X-Tenant-ID`
+  - **Body:** `{"provider": "openai", "model": "gpt-5.1", "api_key": "sk-...", "system_prompt": "..."}` (`api_key` & `system_prompt` opsional)
+  - **Validasi:** `provider` harus `anthropic`/`openai`/`gemini`, `model` harus ada di whitelist provider tersebut — 400 kalau tidak valid
+  - **Catatan:** system prompt custom selalu digabung dengan RAG guardrail wajib (jawab hanya dari konteks, jangan mengarang) yang tidak bisa di-override
+
 **Multi-tenant Headers (Required for knowledge base endpoints):**
 ```
 X-Company-ID: <uuid>
@@ -190,25 +203,28 @@ knowledge-base-api/
 │   │   ├── knowledge.py                    # Document ingestion endpoints
 │   │   ├── completion.py                   # One-shot RAG + streaming endpoint
 │   │   ├── chat.py                         # Multi-turn chat endpoints (+ streaming)
-│   │   └── conversation.py                 # List conversations per tenant
+│   │   ├── conversation.py                 # List conversations per tenant
+│   │   └── llm_settings.py                 # GET/PUT tenant LLM provider settings
 │   ├── services/
 │   │   ├── companies.py                    # Company business logic
 │   │   ├── tenants.py                      # Tenant business logic
 │   │   ├── knowledge.py                    # Ingestion pipeline orchestration
 │   │   ├── chat.py                         # Chat & conversation business logic
+│   │   ├── tenant_llm_settings.py          # LLM settings CRUD + resolve_llm_config_service
 │   │   ├── ingestion.py                    # Document parsing & chunking
-│   │   ├── retrieval.py                    # Vector similarity search (delegasi ke repository)
-│   │   └── llm.py                          # Claude integration & RAG context
+│   │   └── retrieval.py                    # Vector similarity search (delegasi ke repository)
 │   ├── repository/
 │   │   ├── companies.py                    # Query tabel companies
 │   │   ├── tenants.py                      # Query tabel tenants
 │   │   ├── documents.py                    # Query tabel documents
 │   │   ├── document_chunks.py              # Query tabel document_chunks + similarity search
 │   │   ├── conversations.py                # Query tabel conversations
-│   │   └── messages.py                     # Query tabel messages
+│   │   ├── messages.py                     # Query tabel messages
+│   │   └── tenant_llm_settings.py          # Query tabel tenant_llm_settings
 │   ├── core/
 │   │   ├── config.py                       # Settings & environment variables
 │   │   ├── dependencies.py                 # FastAPI dependencies & validation
+│   │   ├── crypto.py                       # Enkripsi/dekripsi API key tenant (Fernet)
 │   │   └── sse.py                          # SSE event formatting helper
 │   ├── db/
 │   │   └── session.py                      # AsyncSession & engine setup
@@ -216,8 +232,14 @@ knowledge-base-api/
 │   │   ├── database.py                     # SQLAlchemy ORM models
 │   │   └── schemas.py                      # Pydantic request/response schemas
 │   ├── infrastructure/
-│   │   └── voyage/
-│   │       └── index.py                    # Voyage AI embedding client
+│   │   ├── voyage/
+│   │   │   └── index.py                    # Voyage AI embedding client
+│   │   └── llm/
+│   │       ├── base.py                     # LLMProvider ABC, guardrail prompt, model whitelist
+│   │       ├── factory.py                  # get_llm_provider(provider, api_key)
+│   │       ├── anthropic/index.py          # AnthropicProvider
+│   │       ├── openai/index.py             # OpenAIProvider
+│   │       └── gemini/index.py             # GeminiProvider
 │   └── alembic/                            # Database migrations
 │       ├── env.py                          # Alembic configuration
 │       ├── versions/                       # Migration files
@@ -289,6 +311,19 @@ created_at TIMESTAMPTZ
 -- Index: CREATE INDEX ON messages (conversation_id, created_at)
 ```
 
+### tenant_llm_settings
+```sql
+id UUID PRIMARY KEY
+tenant_id UUID NOT NULL UNIQUE REFERENCES tenants(id) ON DELETE CASCADE
+company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE
+provider VARCHAR(20) NOT NULL DEFAULT 'anthropic'
+model VARCHAR(100) NOT NULL DEFAULT 'claude-haiku-4-5'
+api_key_encrypted TEXT          -- NULL = pakai API key kita sendiri (fallback)
+system_prompt TEXT              -- NULL = pakai default system prompt
+created_at TIMESTAMPTZ
+updated_at TIMESTAMPTZ
+```
+
 ## Multi-Tenant Convention
 
 Semua request yang berhubungan dengan knowledge base **wajib membawa header**:
@@ -329,8 +364,11 @@ ruff check . --fix
 | Variable | Description | Example |
 |---|---|---|
 | `DATABASE_URL` | PostgreSQL async connection string | `postgresql+asyncpg://user:pass@localhost:5432/db` |
-| `ANTHROPIC_API_KEY` | Claude API key | `sk-ant-...` |
+| `ANTHROPIC_API_KEY` | Claude API key (default fallback kalau tenant tidak provide sendiri) | `sk-ant-...` |
 | `VOYAGE_API_KEY` | Voyage AI API key | `pa-...` |
+| `OPENAI_API_KEY` | OpenAI API key (opsional, default fallback) | `sk-...` |
+| `GEMINI_API_KEY` | Google Gemini API key (opsional, default fallback) | `...` |
+| `LLM_SETTINGS_ENCRYPTION_KEY` | Fernet key untuk enkripsi API key tenant di DB (wajib) | generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `CHUNK_SIZE` | Token size per chunk | `512` |
 | `CHUNK_OVERLAP` | Token overlap between chunks | `50` |
 | `RETRIEVAL_TOP_K` | Number of chunks to retrieve | `5` |
@@ -357,6 +395,7 @@ ruff check . --fix
 - [x] SSE streaming untuk completion & chat
 - [x] Conversation listing (`GET /v1/conversation`)
 - [x] Layered architecture refactor (controller → service → repository)
+- [x] Per-tenant LLM provider settings (`GET/PUT /v1/llm-settings`) — Anthropic, OpenAI, Gemini dengan encrypted API key & custom system prompt
 - [ ] Unit & integration tests
 - [ ] API documentation expansion (OpenAPI/Swagger detail)
 - [ ] Production deployment guide

@@ -124,3 +124,21 @@ class ConversationListItemResponse(BaseModel):
         from_attributes = True
 class ConversationListResponse(BaseModel):
     conversations: list[ConversationListItemResponse]
+
+
+class LLMSettingsUpdate(BaseModel):
+    provider: str
+    model: str
+    api_key: Optional[str] = None
+    system_prompt: Optional[str] = None
+
+
+class LLMSettingsResponse(BaseModel):
+    provider: str
+    model: str
+    has_custom_api_key: bool
+    system_prompt: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

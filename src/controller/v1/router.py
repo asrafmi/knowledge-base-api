@@ -6,6 +6,7 @@ from src.controller.v1.knowledge import router as knowledge_router
 from src.controller.v1.completion import router as completion_router
 from src.controller.v1.chat import router as chat_router
 from src.controller.v1.conversation import router as conversation_router
+from src.controller.v1.llm_settings import router as llm_settings_router
 
 router = APIRouter(prefix="/v1")
 
@@ -15,4 +16,5 @@ router.include_router(knowledge_router)
 router.include_router(completion_router)
 router.include_router(chat_router)
 router.include_router(conversation_router)
+router.include_router(llm_settings_router)
 

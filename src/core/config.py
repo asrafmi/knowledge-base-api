@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     # API Keys
     anthropic_api_key: str
     voyage_api_key: str
+    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+
+    # Security
+    llm_settings_encryption_key: str
 
     # RAG Parameters
     chunk_size: int = 512
